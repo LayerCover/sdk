@@ -336,6 +336,132 @@ export class LayerCoverSDK {
     }
 
     // ========================================================================
+    // STATIC FACTORY METHODS
+    // ========================================================================
+
+    /**
+     * Configuration fetched from the API
+     */
+    static _cachedConfig: {
+        contracts: {
+            policyManager: string;
+            intentOrderBook: string;
+            intentMatcher?: string;
+        };
+        chainId: number;
+        apiBaseUrl: string;
+        deployment?: string;
+        fetchedAt: number;
+    } | null = null;
+
+    /**
+     * Fetch configuration from the LayerCover API.
+     * This allows the SDK to dynamically get contract addresses without hardcoding.
+     * 
+     * @param options Configuration options
+     * @returns Contract configuration
+     */
+    static async fetchConfig(options: {
+        apiBaseUrl?: string;
+        chainId?: number;
+        deployment?: string;
+    } = {}): Promise<{
+        contracts: {
+            policyManager: string;
+            intentOrderBook: string;
+            intentMatcher?: string;
+        };
+        chainId: number;
+        apiBaseUrl: string;
+        deployment?: string;
+    }> {
+        const apiBase = options.apiBaseUrl || DEFAULT_API_BASE_URL;
+
+        // Build query params
+        const params = new URLSearchParams();
+        if (options.chainId) params.set('chainId', options.chainId.toString());
+        if (options.deployment) params.set('deployment', options.deployment);
+
+        const url = `${apiBase}/api/config${params.toString() ? '?' + params.toString() : ''}`;
+
+        console.log('[LayerCover SDK] Fetching config from:', url);
+
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.warn('[LayerCover SDK] Failed to fetch config, using fallback addresses');
+            // Fallback to hardcoded addresses
+            const chainId = options.chainId || DEFAULT_CHAIN_ID;
+            const addresses = CONTRACT_ADDRESSES[chainId];
+            if (!addresses) {
+                throw new Error(`No configuration available for chainId ${chainId}`);
+            }
+            return {
+                contracts: {
+                    policyManager: addresses.policyManager,
+                    intentOrderBook: addresses.intentOrderBook,
+                },
+                chainId,
+                apiBaseUrl: apiBase,
+            };
+        }
+
+        const data = await response.json();
+
+        // Cache the config for 5 minutes
+        LayerCoverSDK._cachedConfig = {
+            contracts: data.contracts,
+            chainId: data.chainId || options.chainId || DEFAULT_CHAIN_ID,
+            apiBaseUrl: data.apiBaseUrl || apiBase,
+            deployment: data.deployment || options.deployment,
+            fetchedAt: Date.now(),
+        };
+
+        return LayerCoverSDK._cachedConfig;
+    }
+
+    /**
+     * Create an SDK instance by automatically fetching configuration from the API.
+     * This is the recommended way to initialize the SDK as it ensures you always
+     * have the latest contract addresses.
+     * 
+     * @param providerOrSigner Ethers provider or signer
+     * @param options Configuration options
+     * @returns Initialized SDK instance
+     * 
+     * @example
+     * ```typescript
+     * // Auto-fetch config for Base Sepolia
+     * const sdk = await LayerCoverSDK.create(signer, { chainId: 84532 });
+     * 
+     * // Auto-fetch config for specific deployment
+     * const sdk = await LayerCoverSDK.create(signer, { deployment: 'base_sepolia_usdc' });
+     * ```
+     */
+    static async create(
+        providerOrSigner: Provider | Signer,
+        options: {
+            apiBaseUrl?: string;
+            chainId?: number;
+            deployment?: string;
+        } = {}
+    ): Promise<LayerCoverSDK> {
+        // Check cache (valid for 5 minutes)
+        const cacheValid = LayerCoverSDK._cachedConfig &&
+            (Date.now() - LayerCoverSDK._cachedConfig.fetchedAt) < 5 * 60 * 1000;
+
+        const config = cacheValid
+            ? LayerCoverSDK._cachedConfig!
+            : await LayerCoverSDK.fetchConfig(options);
+
+        return new LayerCoverSDK(providerOrSigner, config.contracts.policyManager, {
+            intentOrderBookAddress: config.contracts.intentOrderBook,
+            apiBaseUrl: config.apiBaseUrl,
+            chainId: config.chainId,
+            deployment: config.deployment,
+        });
+    }
+
+    // ========================================================================
     // FIXED-RATE QUOTE METHODS (NEW)
     // ========================================================================
 

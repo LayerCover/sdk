@@ -178,6 +178,64 @@ export declare class LayerCoverSDK {
     private _rateEngine?;
     constructor(providerOrSigner: Provider | Signer, policyManagerAddress: string, options?: LayerCoverSDKOptions);
     /**
+     * Configuration fetched from the API
+     */
+    static _cachedConfig: {
+        contracts: {
+            policyManager: string;
+            intentOrderBook: string;
+            intentMatcher?: string;
+        };
+        chainId: number;
+        apiBaseUrl: string;
+        deployment?: string;
+        fetchedAt: number;
+    } | null;
+    /**
+     * Fetch configuration from the LayerCover API.
+     * This allows the SDK to dynamically get contract addresses without hardcoding.
+     *
+     * @param options Configuration options
+     * @returns Contract configuration
+     */
+    static fetchConfig(options?: {
+        apiBaseUrl?: string;
+        chainId?: number;
+        deployment?: string;
+    }): Promise<{
+        contracts: {
+            policyManager: string;
+            intentOrderBook: string;
+            intentMatcher?: string;
+        };
+        chainId: number;
+        apiBaseUrl: string;
+        deployment?: string;
+    }>;
+    /**
+     * Create an SDK instance by automatically fetching configuration from the API.
+     * This is the recommended way to initialize the SDK as it ensures you always
+     * have the latest contract addresses.
+     *
+     * @param providerOrSigner Ethers provider or signer
+     * @param options Configuration options
+     * @returns Initialized SDK instance
+     *
+     * @example
+     * ```typescript
+     * // Auto-fetch config for Base Sepolia
+     * const sdk = await LayerCoverSDK.create(signer, { chainId: 84532 });
+     *
+     * // Auto-fetch config for specific deployment
+     * const sdk = await LayerCoverSDK.create(signer, { deployment: 'base_sepolia_usdc' });
+     * ```
+     */
+    static create(providerOrSigner: Provider | Signer, options?: {
+        apiBaseUrl?: string;
+        chainId?: number;
+        deployment?: string;
+    }): Promise<LayerCoverSDK>;
+    /**
      * Fetch available fixed-rate quotes from the orderbook API
      * @param poolId The pool ID to fetch quotes for
      * @returns Array of available quotes sorted by rate (lowest first)

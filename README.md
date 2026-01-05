@@ -20,14 +20,19 @@ import { ethers } from 'ethers';
 const provider = new ethers.BrowserProvider(window.ethereum);
 const signer = await provider.getSigner();
 
-// 2. Initialize SDK
-const policyManagerAddr = '0x33807f8c7b35E7233e33aFCDB6b3fea0C535c015'; 
-const sdk = new LayerCoverSDK(signer, policyManagerAddr, {
-    apiBaseUrl: 'https://app.layercover.com',
-    deployment: 'base_sepolia_usdc',
-    chainId: 84532,
-});
+// 2. Initialize SDK (Recommended: Auto-fetch configuration)
+const sdk = await LayerCoverSDK.create(signer, { chainId: 84532 });
+
+// Alternative: Manual initialization with specific addresses
+// const sdk = new LayerCoverSDK(signer, policyManagerAddress, {
+//     apiBaseUrl: 'https://app.layercover.com',
+//     deployment: 'base_sepolia_usdc',
+//     chainId: 84532,
+// });
 ```
+
+> **Note:** The `LayerCoverSDK.create()` method automatically fetches the latest
+> contract addresses from the API, so you never need to update hardcoded addresses.
 
 ### Steps to Purchase (Fixed-Rate)
 
