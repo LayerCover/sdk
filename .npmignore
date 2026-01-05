@@ -1,0 +1,21 @@
+# Test files
+tests/
+
+# Development files
+*.test.ts
+*.spec.ts
+
+# TypeScript source (dist is published)
+src/
+
+# Config files
+tsconfig.json
+.eslintrc*
+
+# IDE/Editor
+.vscode/
+.idea/
+
+# Misc
+*.log
+.DS_Store

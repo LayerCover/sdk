@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LayerCover Theme Customizer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f1a;
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+        }
+
+        .sidebar {
+            width: 400px;
+            background: #1a1a2e;
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 24px;
+            overflow-y: auto;
+            max-height: 100vh;
+        }
+
+        .sidebar h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .sidebar p {
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+
+        .section {
+            margin-bottom: 24px;
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 12px;
+        }
+
+        .control-group {
+            margin-bottom: 16px;
+        }
+
+        .control-label {
+            display: block;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 6px;
+        }
+
+        .color-input-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .color-input {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            background: transparent;
+        }
+
+        .color-input::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+
+        .color-input::-webkit-color-swatch {
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+        }
+
+        .text-input {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #fff;
+            font-size: 13px;
+            font-family: 'Monaco', 'Menlo', monospace;
+        }
+
+        .text-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .number-input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #fff;
+            font-size: 13px;
+        }
+
+        .number-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .preview-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            background: repeating-linear-gradient(45deg,
+                    #0f0f1a,
+                    #0f0f1a 10px,
+                    #12121f 10px,
+                    #12121f 20px);
+        }
+
+        .modal-preview {
+            width: 100%;
+            max-width: 480px;
+            border-radius: var(--modal-border-radius);
+            background: var(--modal-bg);
+            overflow: hidden;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 24px;
+        }
+
+        .tab {
+            font-size: 14px;
+            color: var(--text-secondary);
+            padding: 8px 0;
+            cursor: pointer;
+            border: none;
+            background: none;
+            position: relative;
+        }
+
+        .tab.active {
+            color: var(--text-color);
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -17px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--primary-color);
+        }
+
+        .close-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 18px;
+        }
+
+        .modal-content {
+            padding: 24px;
+        }
+
+        .input-section {
+            margin-bottom: 24px;
+        }
+
+        .input-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .input-label span {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-color);
+        }
+
+        .input-label small {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .token-input {
+            display: flex;
+            align-items: center;
+            background: var(--input-bg);
+            border-radius: var(--input-border-radius);
+            padding: 16px;
+        }
+
+        .token-input-value {
+            flex: 1;
+            font-size: 32px;
+            font-weight: 300;
+            color: var(--text-color);
+        }
+
+        .token-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            font-size: 14px;
+            color: var(--text-color);
+        }
+
+        .token-icon {
+            width: 24px;
+            height: 24px;
+            background: #26a17b;
+            border-radius: 50%;
+        }
+
+        .balance-row {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .max-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: var(--text-color);
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .duration-section {
+            margin-bottom: 24px;
+        }
+
+        .duration-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .duration-header h3 {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-color);
+        }
+
+        .duration-header small {
+            font-size: 13px;
+            color: var(--text-secondary);
+            text-align: right;
+        }
+
+        .slider-track {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            position: relative;
+            margin: 20px 0;
+        }
+
+        .slider-fill {
+            position: absolute;
+            left: 0;
+            top: 0;
+            height: 100%;
+            width: 50%;
+            background: var(--primary-color);
+            border-radius: 2px;
+        }
+
+        .slider-thumb {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            background: var(--primary-color);
+            border-radius: 50%;
+            border: 3px solid var(--modal-bg);
+        }
+
+        .slider-marks {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .info-alert {
+            display: flex;
+            gap: 12px;
+            padding: 16px;
+            background: var(--info-bg);
+            border: 1px solid var(--info-border);
+            border-radius: 8px;
+            margin-bottom: 24px;
+        }
+
+        .info-icon {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #2196f3;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #2196f3;
+            flex-shrink: 0;
+        }
+
+        .info-text {
+            font-size: 13px;
+            color: #2196f3;
+            line-height: 1.5;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 16px;
+            background: var(--button-gradient);
+            border: none;
+            border-radius: 12px;
+            color: var(--button-text-color, #fff);
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .submit-btn:hover {
+            background: var(--button-gradient-hover);
+            transform: translateY(-1px);
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            padding: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .modal-footer span {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .layercover-brand {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-weight: 600;
+            font-size: 14px;
+            background: var(--button-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .code-output {
+            margin-top: 32px;
+            width: 100%;
+        }
+
+        .code-output h3 {
+            font-size: 14px;
+            color: var(--text-color);
+            margin-bottom: 12px;
+        }
+
+        .code-block {
+            background: #0a0a12;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            color: #a0a0c0;
+            line-height: 1.6;
+        }
+
+        .copy-btn {
+            margin-top: 12px;
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .reset-btn {
+            margin-left: 8px;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .reset-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .preset-btn {
+            width: 40px;
+            height: 40px;
+            padding: 4px;
+            background: transparent;
+            border: 2px solid transparent;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .preset-btn:hover {
+            border-color: rgba(255, 255, 255, 0.4);
+            transform: scale(1.1);
+        }
+
+        .preset-btn.active {
+            border-color: #fff;
+            transform: scale(1.1);
+        }
+
+        .color-swatch {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="sidebar">
+        <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 24px; padding: 16px 0;">
+            <img src="layercover-logo.png" alt="LayerCover" style="height: 48px;">
+        </div>
+        <h2 style="margin: 0 0 8px 0; font-size: 18px; text-align: center;">Theme Customizer</h2>
+        <p style="text-align: center;">Customize the BuyCoverModal appearance for your application.</p>
+
+        <div class="section">
+            <div class="section-title">Preset Themes</div>
+            <div class="preset-container"
+                style="background: linear-gradient(45deg, #3a3a5a 25%, #4a4a6a 25%, #4a4a6a 50%, #3a3a5a 50%, #3a3a5a 75%, #4a4a6a 75%); background-size: 20px 20px; padding: 16px; border-radius: 12px; margin-bottom: 8px;">
+                <div class="preset-buttons" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
+                    <button class="preset-btn active" onclick="loadPreset('default')" id="preset-default"
+                        title="Purple Dark">
+                        <span class="color-swatch" style="background: #1a1a2e;"></span>
+                    </button>
+                    <button class="preset-btn" onclick="loadPreset('light')" id="preset-light" title="Light">
+                        <span class="color-swatch" style="background: #ffffff;"></span>
+                    </button>
+                    <button class="preset-btn" onclick="loadPreset('black')" id="preset-black" title="Black">
+                        <span class="color-swatch" style="background: #000000;"></span>
+                    </button>
+                    <button class="preset-btn" onclick="loadPreset('navy')" id="preset-navy" title="Navy">
+                        <span class="color-swatch" style="background: #1b2030;"></span>
+                    </button>
+                    <button class="preset-btn" onclick="loadPreset('teal')" id="preset-teal" title="Teal Dark">
+                        <span class="color-swatch" style="background: #0d1f23;"></span>
+                    </button>
+                    <button class="preset-btn" onclick="loadPreset('charcoal')" id="preset-charcoal" title="Charcoal">
+                        <span class="color-swatch" style="background: #0d1117;"></span>
+                    </button>
+                    <button class="preset-btn" onclick="loadPreset('slate')" id="preset-slate" title="Slate">
+                        <span class="color-swatch" style="background: #1e293b;"></span>
+                    </button>
+                    <button class="preset-btn" onclick="loadPreset('carbon')" id="preset-carbon" title="Carbon Blue">
+                        <span class="color-swatch" style="background: #1a1a1e;"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Modal Container</div>
+
+            <div class="control-group">
+                <label class="control-label">Background Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="backgroundColor" value="#1a1a2e">
+                    <input type="text" class="text-input" id="backgroundColorText" value="#1a1a2e">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Border Radius (px)</label>
+                <input type="number" class="number-input" id="borderRadius" value="12" min="0" max="32">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Colors</div>
+
+            <div class="control-group">
+                <label class="control-label">Primary Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="primaryColor" value="#667eea">
+                    <input type="text" class="text-input" id="primaryColorText" value="#667eea">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Text Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="textColor" value="#ffffff">
+                    <input type="text" class="text-input" id="textColorText" value="#ffffff">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Border Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="borderColor" value="#1f1f3a">
+                    <input type="text" class="text-input" id="borderColorText" value="rgba(255, 255, 255, 0.12)">
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Button Gradient</div>
+
+            <div class="control-group">
+                <label class="control-label">Gradient Start Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="gradientStart" value="#667eea">
+                    <input type="text" class="text-input" id="gradientStartText" value="#667eea">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Gradient End Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="gradientEnd" value="#764ba2">
+                    <input type="text" class="text-input" id="gradientEndText" value="#764ba2">
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Input Styling</div>
+
+            <div class="control-group">
+                <label class="control-label">Input Background Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="inputBackgroundColor" value="#262640">
+                    <input type="text" class="text-input" id="inputBackgroundColorText"
+                        value="rgba(255, 255, 255, 0.05)">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Input Border Radius (px)</label>
+                <input type="number" class="number-input" id="inputBorderRadius" value="8" min="0" max="24">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Info Alert</div>
+
+            <div class="control-group">
+                <label class="control-label">Info Background Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="infoBackgroundColor" value="#1a3a5c">
+                    <input type="text" class="text-input" id="infoBackgroundColorText" value="rgba(33, 150, 243, 0.1)">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Info Border Color</label>
+                <div class="color-input-wrapper">
+                    <input type="color" class="color-input" id="infoBorderColor" value="#2196f3">
+                    <input type="text" class="text-input" id="infoBorderColorText" value="rgba(33, 150, 243, 0.3)">
+                </div>
+            </div>
+        </div>
+
+        <div class="buttons">
+            <button class="copy-btn" onclick="copyCode()">📋 Copy Theme Code</button>
+            <button class="reset-btn" onclick="resetTheme()">↺ Reset</button>
+        </div>
+    </div>
+
+    <div class="preview-container">
+        <div class="modal-preview" id="modalPreview">
+            <div class="modal-header">
+                <div class="tabs">
+                    <button class="tab active">Purchase</button>
+                    <button class="tab">How it works</button>
+                </div>
+                <button class="close-btn">×</button>
+            </div>
+
+            <div class="modal-content">
+                <div class="input-section">
+                    <div class="input-label">
+                        <span>Amount</span>
+                        <small>Enter the amount of USDC cover</small>
+                    </div>
+                    <div class="token-input">
+                        <span class="token-input-value">100</span>
+                        <div class="token-badge">
+                            <div class="token-icon"></div>
+                            USDC
+                        </div>
+                    </div>
+                    <div class="balance-row">
+                        <span>$100.00</span>
+                        <span>Available: 1,000.00 <button class="max-btn">MAX</button></span>
+                    </div>
+                </div>
+
+                <div class="duration-section">
+                    <div class="duration-header">
+                        <h3>Coverage Duration</h3>
+                        <small>26 Weeks<br>Ends Jun 28, 2025</small>
+                    </div>
+                    <div class="slider-track">
+                        <div class="slider-fill"></div>
+                        <div class="slider-thumb"></div>
+                    </div>
+                    <div class="slider-marks">
+                        <span>1W</span>
+                        <span>13W</span>
+                        <span>26W</span>
+                        <span>39W</span>
+                        <span>52W</span>
+                    </div>
+                </div>
+
+                <div class="info-alert">
+                    <div class="info-icon">i</div>
+                    <div class="info-text">Note: Premiums can fluctuate, so the exact duration is an estimate based on
+                        the current rate.</div>
+                </div>
+
+                <button class="submit-btn">Confirm Transaction</button>
+            </div>
+
+            <div class="modal-footer">
+                <span>Powered by</span>
+                <img id="footer-logo" src="layercover-logo.png" alt="LayerCover" style="height: 24px;"
+                    onerror="this.style.display='none'; this.insertAdjacentHTML('afterend', '<span class=\'layercover-brand\'>🛡️ LayerCover</span>')">
+                <span style="font-size: 12px;">↗</span>
+            </div>
+        </div>
+
+        <div class="code-output">
+            <h3>Generated Theme Code</h3>
+            <pre class="code-block" id="codeOutput">// Loading...</pre>
+        </div>
+    </div>
+
+    <script>
+        const defaultTheme = {
+            backgroundColor: '#1a1a2e',
+            borderRadius: 12,
+            primaryColor: '#667eea',
+            textColor: '#ffffff',
+            textSecondaryColor: 'rgba(255, 255, 255, 0.7)',
+            borderColor: 'rgba(255, 255, 255, 0.12)',
+            buttonGradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            buttonGradientHover: 'linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%)',
+            inputBackgroundColor: 'rgba(255, 255, 255, 0.05)',
+            inputBorderRadius: 8,
+            infoBackgroundColor: 'rgba(33, 150, 243, 0.1)',
+            infoBorderColor: 'rgba(33, 150, 243, 0.3)',
+            accordionBackgroundColor: 'rgba(255, 255, 255, 0.05)',
+            accordionExpandedBackgroundColor: 'rgba(255, 255, 255, 0.08)',
+        };
+
+        function updatePreview() {
+            const bgColor = document.getElementById('backgroundColorText').value;
+            const borderRadius = document.getElementById('borderRadius').value;
+            const primaryColor = document.getElementById('primaryColorText').value;
+            const textColor = document.getElementById('textColorText').value;
+            const borderColor = document.getElementById('borderColorText').value;
+            const gradientStart = document.getElementById('gradientStartText').value;
+            const gradientEnd = document.getElementById('gradientEndText').value;
+            const inputBg = document.getElementById('inputBackgroundColorText').value;
+            const inputRadius = document.getElementById('inputBorderRadius').value;
+            const infoBg = document.getElementById('infoBackgroundColorText').value;
+            const infoBorder = document.getElementById('infoBorderColorText').value;
+
+            const textSecondary = `rgba(${hexToRgb(textColor)}, 0.7)`;
+            const buttonGradient = `linear-gradient(135deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
+            const buttonGradientHover = `linear-gradient(135deg, ${adjustBrightness(gradientStart, -10)} 0%, ${adjustBrightness(gradientEnd, -10)} 100%)`;
+
+            // Update CSS variables
+            document.documentElement.style.setProperty('--modal-bg', bgColor);
+            document.documentElement.style.setProperty('--modal-border-radius', borderRadius + 'px');
+            document.documentElement.style.setProperty('--primary-color', primaryColor);
+            document.documentElement.style.setProperty('--text-color', textColor);
+            document.documentElement.style.setProperty('--text-secondary', textSecondary);
+            document.documentElement.style.setProperty('--border-color', borderColor);
+            document.documentElement.style.setProperty('--button-gradient', buttonGradient);
+            document.documentElement.style.setProperty('--button-gradient-hover', buttonGradientHover);
+            document.documentElement.style.setProperty('--input-bg', inputBg);
+            document.documentElement.style.setProperty('--input-border-radius', inputRadius + 'px');
+            document.documentElement.style.setProperty('--info-bg', infoBg);
+            document.documentElement.style.setProperty('--info-border', infoBorder);
+
+            // Set button text color based on gradient brightness (dark text on light buttons)
+            const buttonTextColor = isLightBackground(gradientStart) ? bgColor : '#ffffff';
+            document.documentElement.style.setProperty('--button-text-color', buttonTextColor);
+
+            // Switch logo based on background luminance
+            const footerLogo = document.getElementById('footer-logo');
+            if (footerLogo) {
+                const isLight = isLightBackground(bgColor);
+                footerLogo.src = isLight ? 'layercover-logo-light.png' : 'layercover-logo.png';
+            }
+
+            // Update code output
+            updateCodeOutput();
+        }
+
+        // Helper to check if background is light
+        function isLightBackground(hexColor) {
+            const hex = hexColor.replace('#', '');
+            if (hex.length !== 6) return false;
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+            const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+            return luminance > 0.5;
+        }
+
+        function updateCodeOutput() {
+            const bgColor = document.getElementById('backgroundColorText').value;
+            const borderRadius = document.getElementById('borderRadius').value;
+            const primaryColor = document.getElementById('primaryColorText').value;
+            const textColor = document.getElementById('textColorText').value;
+            const borderColor = document.getElementById('borderColorText').value;
+            const gradientStart = document.getElementById('gradientStartText').value;
+            const gradientEnd = document.getElementById('gradientEndText').value;
+            const inputBg = document.getElementById('inputBackgroundColorText').value;
+            const inputRadius = document.getElementById('inputBorderRadius').value;
+            const infoBg = document.getElementById('infoBackgroundColorText').value;
+            const infoBorder = document.getElementById('infoBorderColorText').value;
+
+            const code = `import { createTheme } from '@layercover/sdk/react';
+
+const customTheme = createTheme({
+    backgroundColor: '${bgColor}',
+    borderRadius: ${borderRadius},
+    primaryColor: '${primaryColor}',
+    textColor: '${textColor}',
+    textSecondaryColor: 'rgba(255, 255, 255, 0.7)',
+    borderColor: '${borderColor}',
+    buttonGradient: 'linear-gradient(135deg, ${gradientStart} 0%, ${gradientEnd} 100%)',
+    buttonGradientHover: 'linear-gradient(135deg, ${adjustBrightness(gradientStart, -10)} 0%, ${adjustBrightness(gradientEnd, -10)} 100%)',
+    inputBackgroundColor: '${inputBg}',
+    inputBorderRadius: ${inputRadius},
+    infoBackgroundColor: '${infoBg}',
+    infoBorderColor: '${infoBorder}',
+});
+
+// Usage:
+<CoverButton
+    signer={signer}
+    poolId={1}
+    theme={customTheme}
+    referralCode="YOUR_PARTNER_CODE"  // Optional: earn referral fees
+/>`;
+
+            document.getElementById('codeOutput').textContent = code;
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            if (result) {
+                return `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`;
+            }
+            return '255, 255, 255';
+        }
+
+        function adjustBrightness(hex, percent) {
+            const num = parseInt(hex.replace('#', ''), 16);
+            const amt = Math.round(2.55 * percent);
+            const R = Math.max(0, Math.min(255, (num >> 16) + amt));
+            const G = Math.max(0, Math.min(255, ((num >> 8) & 0x00FF) + amt));
+            const B = Math.max(0, Math.min(255, (num & 0x0000FF) + amt));
+            return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
+        }
+
+        function copyCode() {
+            const code = document.getElementById('codeOutput').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = '✓ Copied!';
+                setTimeout(() => {
+                    btn.textContent = '📋 Copy Theme Code';
+                }, 2000);
+            });
+        }
+
+        function resetTheme() {
+            document.getElementById('backgroundColor').value = '#1a1a2e';
+            document.getElementById('backgroundColorText').value = '#1a1a2e';
+            document.getElementById('borderRadius').value = 12;
+            document.getElementById('primaryColor').value = '#667eea';
+            document.getElementById('primaryColorText').value = '#667eea';
+            document.getElementById('textColor').value = '#ffffff';
+            document.getElementById('textColorText').value = '#ffffff';
+            document.getElementById('borderColor').value = '#1f1f3a';
+            document.getElementById('borderColorText').value = 'rgba(255, 255, 255, 0.12)';
+            document.getElementById('gradientStart').value = '#667eea';
+            document.getElementById('gradientStartText').value = '#667eea';
+            document.getElementById('gradientEnd').value = '#764ba2';
+            document.getElementById('gradientEndText').value = '#764ba2';
+            document.getElementById('inputBackgroundColor').value = '#262640';
+            document.getElementById('inputBackgroundColorText').value = 'rgba(255, 255, 255, 0.05)';
+            document.getElementById('inputBorderRadius').value = 8;
+            document.getElementById('infoBackgroundColor').value = '#1a3a5c';
+            document.getElementById('infoBackgroundColorText').value = 'rgba(33, 150, 243, 0.1)';
+            document.getElementById('infoBorderColor').value = '#2196f3';
+            document.getElementById('infoBorderColorText').value = 'rgba(33, 150, 243, 0.3)';
+            updatePreview();
+        }
+
+        // Sync color picker with text input
+        function setupColorSync(colorId, textId) {
+            const colorInput = document.getElementById(colorId);
+            const textInput = document.getElementById(textId);
+
+            colorInput.addEventListener('input', () => {
+                textInput.value = colorInput.value;
+                updatePreview();
+            });
+
+            textInput.addEventListener('input', () => {
+                if (textInput.value.match(/^#[0-9A-Fa-f]{6}$/)) {
+                    colorInput.value = textInput.value;
+                }
+                updatePreview();
+            });
+        }
+
+        // Setup all color syncs
+        setupColorSync('backgroundColor', 'backgroundColorText');
+        setupColorSync('primaryColor', 'primaryColorText');
+        setupColorSync('textColor', 'textColorText');
+        setupColorSync('borderColor', 'borderColorText');
+        setupColorSync('gradientStart', 'gradientStartText');
+        setupColorSync('gradientEnd', 'gradientEndText');
+        setupColorSync('inputBackgroundColor', 'inputBackgroundColorText');
+        setupColorSync('infoBackgroundColor', 'infoBackgroundColorText');
+        setupColorSync('infoBorderColor', 'infoBorderColorText');
+
+        // Number inputs
+        document.getElementById('borderRadius').addEventListener('input', updatePreview);
+        document.getElementById('inputBorderRadius').addEventListener('input', updatePreview);
+
+        // Preset themes
+        const presetThemes = {
+            default: {
+                backgroundColor: '#1a1a2e',
+                borderRadius: 12,
+                primaryColor: '#3b82f6',
+                textColor: '#ffffff',
+                borderColor: 'rgba(255, 255, 255, 0.12)',
+                gradientStart: '#3b82f6',
+                gradientEnd: '#2563eb',
+                inputBackgroundColor: 'rgba(255, 255, 255, 0.05)',
+                inputBorderRadius: 8,
+                infoBackgroundColor: 'rgba(59, 130, 246, 0.1)',
+                infoBorderColor: 'rgba(59, 130, 246, 0.3)',
+            },
+            light: {
+                backgroundColor: '#ffffff',
+                borderRadius: 16,
+                primaryColor: '#3b82f6',
+                textColor: '#1a1a2e',
+                borderColor: 'rgba(0, 0, 0, 0.1)',
+                gradientStart: '#3b82f6',
+                gradientEnd: '#2563eb',
+                inputBackgroundColor: '#f0f7ff',
+                inputBorderRadius: 12,
+                infoBackgroundColor: 'rgba(59, 130, 246, 0.1)',
+                infoBorderColor: 'rgba(59, 130, 246, 0.3)',
+            },
+            black: {
+                backgroundColor: '#000000',
+                borderRadius: 12,
+                primaryColor: '#a855f7',
+                textColor: '#ffffff',
+                borderColor: 'rgba(255, 255, 255, 0.15)',
+                gradientStart: '#a855f7',
+                gradientEnd: '#7c3aed',
+                inputBackgroundColor: 'rgba(255, 255, 255, 0.08)',
+                inputBorderRadius: 8,
+                infoBackgroundColor: 'rgba(168, 85, 247, 0.15)',
+                infoBorderColor: 'rgba(168, 85, 247, 0.3)',
+            },
+            navy: {
+                backgroundColor: '#1b2030',
+                borderRadius: 12,
+                primaryColor: '#ffffff',
+                textColor: '#ffffff',
+                borderColor: 'rgba(255, 255, 255, 0.08)',
+                gradientStart: '#ffffff',
+                gradientEnd: '#e5e7eb',
+                inputBackgroundColor: 'rgba(255, 255, 255, 0.04)',
+                inputBorderRadius: 8,
+                infoBackgroundColor: 'rgba(46, 186, 198, 0.1)',
+                infoBorderColor: 'rgba(46, 186, 198, 0.3)',
+            },
+            teal: {
+                backgroundColor: '#0d1f23',
+                borderRadius: 16,
+                primaryColor: '#2dd4bf',
+                textColor: '#ffffff',
+                borderColor: 'rgba(45, 212, 191, 0.2)',
+                gradientStart: '#2dd4bf',
+                gradientEnd: '#14b8a6',
+                inputBackgroundColor: 'rgba(45, 212, 191, 0.08)',
+                inputBorderRadius: 12,
+                infoBackgroundColor: 'rgba(45, 212, 191, 0.1)',
+                infoBorderColor: 'rgba(45, 212, 191, 0.25)',
+            },
+            charcoal: {
+                backgroundColor: '#0d1117',
+                borderRadius: 12,
+                primaryColor: '#00d395',
+                textColor: '#ffffff',
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+                gradientStart: '#00d395',
+                gradientEnd: '#00b380',
+                inputBackgroundColor: 'rgba(255, 255, 255, 0.05)',
+                inputBorderRadius: 8,
+                infoBackgroundColor: 'rgba(0, 211, 149, 0.1)',
+                infoBorderColor: 'rgba(0, 211, 149, 0.3)',
+            },
+            slate: {
+                backgroundColor: '#1e293b',
+                borderRadius: 12,
+                primaryColor: '#3b82f6',
+                textColor: '#ffffff',
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+                gradientStart: '#3b82f6',
+                gradientEnd: '#2563eb',
+                inputBackgroundColor: 'rgba(255, 255, 255, 0.05)',
+                inputBorderRadius: 8,
+                infoBackgroundColor: 'rgba(59, 130, 246, 0.15)',
+                infoBorderColor: 'rgba(59, 130, 246, 0.3)',
+            },
+            carbon: {
+                backgroundColor: '#1a1a1e',
+                borderRadius: 12,
+                primaryColor: '#3b82f6',
+                textColor: '#ffffff',
+                borderColor: 'rgba(255, 255, 255, 0.08)',
+                gradientStart: '#3b82f6',
+                gradientEnd: '#2563eb',
+                inputBackgroundColor: 'rgba(255, 255, 255, 0.04)',
+                inputBorderRadius: 8,
+                infoBackgroundColor: 'rgba(234, 179, 8, 0.15)',
+                infoBorderColor: 'rgba(234, 179, 8, 0.4)',
+            },
+        };
+
+        function loadPreset(presetName) {
+            const preset = presetThemes[presetName];
+            if (!preset) return;
+
+            // Update form values
+            document.getElementById('backgroundColor').value = preset.backgroundColor.startsWith('#') ? preset.backgroundColor : '#1a1a2e';
+            document.getElementById('backgroundColorText').value = preset.backgroundColor;
+            document.getElementById('borderRadius').value = preset.borderRadius;
+            document.getElementById('primaryColor').value = preset.primaryColor;
+            document.getElementById('primaryColorText').value = preset.primaryColor;
+            document.getElementById('textColor').value = preset.textColor.startsWith('#') ? preset.textColor : '#ffffff';
+            document.getElementById('textColorText').value = preset.textColor;
+            document.getElementById('borderColor').value = '#1f1f3a';
+            document.getElementById('borderColorText').value = preset.borderColor;
+            document.getElementById('gradientStart').value = preset.gradientStart;
+            document.getElementById('gradientStartText').value = preset.gradientStart;
+            document.getElementById('gradientEnd').value = preset.gradientEnd;
+            document.getElementById('gradientEndText').value = preset.gradientEnd;
+            document.getElementById('inputBackgroundColor').value = '#262640';
+            document.getElementById('inputBackgroundColorText').value = preset.inputBackgroundColor;
+            document.getElementById('inputBorderRadius').value = preset.inputBorderRadius;
+            document.getElementById('infoBackgroundColor').value = '#1a3a5c';
+            document.getElementById('infoBackgroundColorText').value = preset.infoBackgroundColor;
+            document.getElementById('infoBorderColor').value = '#2196f3';
+            document.getElementById('infoBorderColorText').value = preset.infoBorderColor;
+
+            // Update active button
+            document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('preset-' + presetName).classList.add('active');
+
+            updatePreview();
+        }
+
+        // Initial update
+        updatePreview();
+    </script>
+</body>
+
+</html>

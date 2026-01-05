@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LayerCover Headless SDK Test</title>
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #2a2a3a;
+            --primary: #6366f1;
+            --primary-hover: #818cf8;
+            --success: #22c55e;
+            --error: #ef4444;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--primary), #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        input,
+        select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 1rem;
+        }
+
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        button {
+            width: 100%;
+            padding: 0.875rem 1.5rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--primary-hover);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+        }
+
+        .btn-success {
+            background: var(--success);
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            margin-bottom: 1rem;
+        }
+
+        .status.connected {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success);
+        }
+
+        .status.disconnected {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+        }
+
+        .quote-result {
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .quote-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .quote-row:last-child {
+            border-bottom: none;
+        }
+
+        .quote-label {
+            color: var(--text-muted);
+        }
+
+        .quote-value {
+            font-weight: 600;
+        }
+
+        .log {
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.75rem;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .log-entry {
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-time {
+            color: var(--text-muted);
+        }
+
+        .log-success {
+            color: var(--success);
+        }
+
+        .log-error {
+            color: var(--error);
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .steps {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .step {
+            flex: 1;
+            padding: 0.5rem;
+            text-align: center;
+            font-size: 0.75rem;
+            background: var(--bg);
+            border-radius: 6px;
+            color: var(--text-muted);
+        }
+
+        .step.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        .step.done {
+            background: var(--success);
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🛡️ LayerCover Headless SDK</h1>
+        <p class="subtitle">Test the API-based purchase flow with MetaMask</p>
+
+        <!-- Connection Status -->
+        <div id="connectionStatus" class="status disconnected">
+            <span>⚪</span> Not Connected
+        </div>
+
+        <!-- Steps Indicator -->
+        <div class="steps">
+            <div class="step" id="step1">1. Connect</div>
+            <div class="step" id="step2">2. Quote</div>
+            <div class="step" id="step3">3. Approve</div>
+            <div class="step" id="step4">4. Purchase</div>
+        </div>
+
+        <!-- Step 1: Connect Wallet -->
+        <div class="card" id="connectCard">
+            <div class="card-title">Step 1: Connect Wallet</div>
+            <button id="connectBtn" onclick="connectWallet()">
+                Connect MetaMask
+            </button>
+        </div>
+
+        <!-- Step 2: Get Quote -->
+        <div class="card hidden" id="quoteCard">
+            <div class="card-title">Step 2: Get Quote</div>
+
+            <div class="form-group">
+                <label>Pool ID</label>
+                <select id="poolId">
+                    <option value="1">Pool 1 - USDC Protection</option>
+                    <option value="2">Pool 2 - Vault Cover</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Coverage Amount (USDC)</label>
+                <input type="number" id="amount" value="100" min="1" step="1">
+            </div>
+
+            <div class="form-group">
+                <label>Duration (weeks)</label>
+                <input type="number" id="duration" value="12" min="5" max="52">
+            </div>
+
+            <button onclick="getQuote()">Get Quote</button>
+
+            <div id="quoteResult" class="quote-result hidden"></div>
+        </div>
+
+        <!-- Step 3: Purchase -->
+        <div class="card hidden" id="purchaseCard">
+            <div class="card-title">Step 3: Execute Purchase</div>
+            <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.875rem;">
+                This will submit two transactions: token approval and purchase.
+            </p>
+            <button id="purchaseBtn" onclick="executePurchase()" class="btn-success">
+                🔐 Approve & Purchase
+            </button>
+        </div>
+
+        <!-- Activity Log -->
+        <div class="card">
+            <div class="card-title">Activity Log</div>
+            <div id="log" class="log">
+                <div class="log-entry">Waiting for wallet connection...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3001';
+        const DEPLOYMENT = 'base_sepolia_usdc';
+        const DECIMALS = 6; // USDC decimals
+
+        let walletAddress = null;
+        let currentQuote = null;
+        let preparedTx = null;
+
+        // Logging helper
+        function log(message, type = 'info') {
+            const logEl = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const className = type === 'success' ? 'log-success' : type === 'error' ? 'log-error' : '';
+            logEl.innerHTML = `<div class="log-entry ${className}"><span class="log-time">[${time}]</span> ${message}</div>` + logEl.innerHTML;
+        }
+
+        function updateStep(step, status) {
+            const stepEl = document.getElementById(`step${step}`);
+            stepEl.className = `step ${status}`;
+        }
+
+        // Step 1: Connect Wallet
+        async function connectWallet() {
+            if (!window.ethereum) {
+                log('MetaMask not detected!', 'error');
+                alert('Please install MetaMask');
+                return;
+            }
+
+            try {
+                log('Requesting wallet connection...');
+                const accounts = await window.ethereum.request({
+                    method: 'eth_requestAccounts'
+                });
+
+                walletAddress = accounts[0];
+                log(`Connected: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`, 'success');
+
+                // Update UI
+                document.getElementById('connectionStatus').className = 'status connected';
+                document.getElementById('connectionStatus').innerHTML = `<span>🟢</span> ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
+                document.getElementById('connectCard').classList.add('hidden');
+                document.getElementById('quoteCard').classList.remove('hidden');
+                updateStep(1, 'done');
+                updateStep(2, 'active');
+
+                // Check network
+                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                if (chainId !== '0x14a34') { // Base Sepolia
+                    log('⚠️ Please switch to Base Sepolia network', 'error');
+                }
+
+            } catch (error) {
+                log(`Connection failed: ${error.message}`, 'error');
+            }
+        }
+
+        // Step 2: Get Quote
+        async function getQuote() {
+            const poolId = document.getElementById('poolId').value;
+            const amountUSDC = document.getElementById('amount').value;
+            const duration = document.getElementById('duration').value;
+
+            // Convert to smallest unit (6 decimals for USDC)
+            const amountWei = BigInt(Math.floor(parseFloat(amountUSDC) * 10 ** DECIMALS)).toString();
+
+            try {
+                log(`Fetching quote for ${amountUSDC} USDC, ${duration} weeks...`);
+
+                const response = await fetch(
+                    `${API_BASE}/api/quote?poolId=${poolId}&amount=${amountWei}&duration=${duration}&deployment=${DEPLOYMENT}`
+                );
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+
+                currentQuote = data.quote;
+                log(`Quote received: ${currentQuote.premiumRatePercent}% APY`, 'success');
+
+                // Display quote
+                const premiumUSDC = (parseFloat(currentQuote.premiumAmount) / 10 ** DECIMALS).toFixed(4);
+                document.getElementById('quoteResult').innerHTML = `
+                    <div class="quote-row">
+                        <span class="quote-label">Coverage</span>
+                        <span class="quote-value">${amountUSDC} USDC</span>
+                    </div>
+                    <div class="quote-row">
+                        <span class="quote-label">Duration</span>
+                        <span class="quote-value">${duration} weeks</span>
+                    </div>
+                    <div class="quote-row">
+                        <span class="quote-label">Rate</span>
+                        <span class="quote-value">${currentQuote.premiumRatePercent}% APY</span>
+                    </div>
+                    <div class="quote-row">
+                        <span class="quote-label">Premium</span>
+                        <span class="quote-value">${premiumUSDC} USDC</span>
+                    </div>
+                    <div class="quote-row">
+                        <span class="quote-label">Provider</span>
+                        <span class="quote-value">${currentQuote.quotesUsed[0]?.syndicateName || 'Unknown'}</span>
+                    </div>
+                `;
+                document.getElementById('quoteResult').classList.remove('hidden');
+                document.getElementById('purchaseCard').classList.remove('hidden');
+                updateStep(2, 'done');
+                updateStep(3, 'active');
+
+            } catch (error) {
+                log(`Quote failed: ${error.message}`, 'error');
+            }
+        }
+
+        // Step 3: Execute Purchase
+        async function executePurchase() {
+            if (!currentQuote || !walletAddress) {
+                log('Please get a quote first', 'error');
+                return;
+            }
+
+            const amountWei = currentQuote.coverageAmount;
+            const quoteId = currentQuote.quotesUsed[0]?.quoteId;
+
+            if (!quoteId) {
+                log('No quote ID available', 'error');
+                return;
+            }
+
+            try {
+                // Step 3a: Prepare transaction
+                log('Preparing transaction calldata...');
+
+                const prepareResponse = await fetch(`${API_BASE}/api/purchase/prepare`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        quoteId,
+                        amount: amountWei,
+                        durationWeeks: parseInt(document.getElementById('duration').value),
+                        buyerAddress: walletAddress
+                    })
+                });
+
+                const prepareData = await prepareResponse.json();
+                if (!prepareData.success) {
+                    throw new Error(prepareData.error);
+                }
+
+                preparedTx = prepareData;
+                log('Transaction prepared', 'success');
+
+                // Step 3b: Send approval transaction
+                log('Sending approval transaction...');
+                updateStep(3, 'active');
+
+                const approvalTx = preparedTx.transactions.approval;
+                const approvalHash = await window.ethereum.request({
+                    method: 'eth_sendTransaction',
+                    params: [{
+                        from: walletAddress,
+                        to: approvalTx.to,
+                        data: approvalTx.data,
+                    }]
+                });
+
+                log(`Approval tx: ${approvalHash.slice(0, 10)}...`, 'success');
+                log('Waiting for confirmation...');
+
+                // Wait a bit for confirmation (in production, use proper receipt polling)
+                await new Promise(r => setTimeout(r, 3000));
+
+                updateStep(3, 'done');
+                updateStep(4, 'active');
+
+                // Step 3c: Send purchase transaction
+                log('Sending purchase transaction...');
+
+                const purchaseTx = preparedTx.transactions.postBuyOrder;
+                const purchaseHash = await window.ethereum.request({
+                    method: 'eth_sendTransaction',
+                    params: [{
+                        from: walletAddress,
+                        to: purchaseTx.to,
+                        data: purchaseTx.data,
+                    }]
+                });
+
+                log(`Purchase tx: ${purchaseHash.slice(0, 10)}...`, 'success');
+                log('Waiting for confirmation...');
+
+                // Wait for confirmation
+                await new Promise(r => setTimeout(r, 5000));
+
+                // Step 3d: Confirm purchase
+                log('Confirming purchase...');
+
+                const confirmResponse = await fetch(`${API_BASE}/api/purchase/confirm`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        quoteId,
+                        txHash: purchaseHash,
+                        filledAmount: amountWei
+                    })
+                });
+
+                const confirmData = await confirmResponse.json();
+                if (confirmData.success) {
+                    log('🎉 Purchase complete!', 'success');
+                    updateStep(4, 'done');
+                } else {
+                    log(`Confirmation issue: ${confirmData.error}`, 'error');
+                }
+
+            } catch (error) {
+                log(`Purchase failed: ${error.message}`, 'error');
+            }
+        }
+
+        // Listen for account changes
+        if (window.ethereum) {
+            window.ethereum.on('accountsChanged', (accounts) => {
+                if (accounts.length === 0) {
+                    walletAddress = null;
+                    document.getElementById('connectionStatus').className = 'status disconnected';
+                    document.getElementById('connectionStatus').innerHTML = '<span>⚪</span> Disconnected';
+                    log('Wallet disconnected', 'error');
+                } else {
+                    walletAddress = accounts[0];
+                    log(`Account changed: ${walletAddress.slice(0, 6)}...`, 'success');
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>

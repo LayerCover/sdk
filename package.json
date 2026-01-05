@@ -1,0 +1,82 @@
+{
+    "name": "@layercover/sdk",
+    "version": "0.2.0",
+    "description": "LayerCover SDK for seamless insurance integration",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "require": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./react": {
+            "import": "./dist/react/index.js",
+            "require": "./dist/react/index.js",
+            "types": "./dist/react/index.d.ts"
+        },
+        "./dist/*": "./dist/*"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE",
+        "CHANGELOG.md"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "clean": "rm -rf dist",
+        "prepublishOnly": "npm run clean && npm run build",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/layercover/sdk.git"
+    },
+    "homepage": "https://docs.layercover.com/sdk",
+    "bugs": {
+        "url": "https://github.com/layercover/sdk/issues"
+    },
+    "dependencies": {
+        "ethers": "^6.15.0"
+    },
+    "peerDependencies": {
+        "@mui/icons-material": "^5.0.0",
+        "@mui/material": "^5.0.0",
+        "react": "^17.0.0 || ^18.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@mui/icons-material": {
+            "optional": true
+        },
+        "@mui/material": {
+            "optional": true
+        },
+        "react": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@emotion/react": "^11.14.0",
+        "@emotion/styled": "^11.14.1",
+        "@mui/icons-material": "^7.3.6",
+        "@mui/material": "^7.3.6",
+        "@types/node": "^25.0.3",
+        "@types/react": "^18.3.27",
+        "react": "^19.2.3",
+        "typescript": "^4.9.5"
+    },
+    "keywords": [
+        "insurance",
+        "defi",
+        "sdk",
+        "ethereum",
+        "smart-contracts",
+        "web3",
+        "blockchain",
+        "coverage",
+        "risk"
+    ],
+    "author": "LayerCover",
+    "license": "MIT"
+}
