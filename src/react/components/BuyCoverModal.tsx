@@ -25,7 +25,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { formatUnits, parseUnits } from 'ethers';
-import { LayerCoverSDK, Quote, PoolMetadata, getPolicyManagerAddress, DEFAULT_CHAIN_ID } from '../../index';
+import { LayerCoverSDK, FixedRateQuote, PoolMetadata, DEFAULT_CHAIN_ID } from '../../index';
 import { LAYERCOVER_LOGO_DARK, LAYERCOVER_LOGO_LIGHT } from './logo';
 
 // Helper to detect if a color is light (for logo selection)
@@ -98,65 +98,10 @@ const FAQ_ITEMS = [
 ];
 
 /**
- * Known error selectors from LayerCover contracts
+ * Decode error message from contract revert.
+ * Delegates to the centralized error module.
  */
-const ERROR_SELECTORS: Record<string, string> = {
-    '0xa4264d34': 'Insufficient pool capacity. Try a smaller amount or shorter duration.',
-    '0x8e4a23d6': 'Pool is not active. The pool may be paused or not configured.',
-    '0x6a0d4594': 'Invalid pool configuration. Please contact support.',
-    '0xe450d38c': 'Insufficient token balance. Please check your wallet balance.',
-    '0xfb8f41b2': 'Token transfer failed. Please check your token approval.',
-    '0x7939f424': 'Amount exceeds maximum coverage limit.',
-    '0x3ee5aeb5': 'Unauthorized access. Please check your wallet connection.',
-};
-
-/**
- * Decode error message from contract revert
- */
-function decodeError(error: any): string {
-    // Check for user rejection
-    if (error?.message?.includes('user rejected') || error?.code === 'ACTION_REJECTED') {
-        return 'Transaction was rejected by user.';
-    }
-
-    // Extract error data from various error formats
-    let errorData = error?.data || error?.error?.data || '';
-
-    // If error data is in the message, extract it
-    if (!errorData && error?.message) {
-        const match = error.message.match(/data="(0x[a-fA-F0-9]+)"/);
-        if (match) {
-            errorData = match[1];
-        }
-    }
-
-    // Check if we have error data with a known selector
-    if (errorData && typeof errorData === 'string' && errorData.startsWith('0x')) {
-        const selector = errorData.slice(0, 10).toLowerCase();
-        if (ERROR_SELECTORS[selector]) {
-            return ERROR_SELECTORS[selector];
-        }
-    }
-
-    // Check for common error patterns in message
-    const msg = error?.message?.toLowerCase() || '';
-    if (msg.includes('insufficient funds')) {
-        return 'Insufficient funds for transaction gas fees.';
-    }
-    if (msg.includes('execution reverted')) {
-        return 'Transaction would fail. Please try a smaller amount or contact support.';
-    }
-    if (msg.includes('network') || msg.includes('connection')) {
-        return 'Network error. Please check your connection and try again.';
-    }
-
-    // Return a cleaner version of the original message
-    if (error?.shortMessage) {
-        return error.shortMessage;
-    }
-
-    return error?.message || 'Failed to get quote. Please try again.';
-}
+import { getHumanError as decodeError } from '../../errors';
 
 /**
  * Ready-to-use Buy Cover modal component.
@@ -223,30 +168,30 @@ export function BuyCoverModal({
         [theme]
     );
 
-    // Resolve PolicyManager address from signer's chain
-    const [policyManagerAddress, setPolicyManagerAddress] = useState<string>('');
+    // SDK instance — created once from signer, auto-resolves contract addresses
+    const [sdk, setSdk] = useState<LayerCoverSDK | null>(null);
     const [chainError, setChainError] = useState<string>('');
 
     useEffect(() => {
-        const resolveAddress = async () => {
+        const initSdk = async () => {
             if (!signer) return;
             try {
-                const network = await signer.provider?.getNetwork();
-                const chainId = network?.chainId ? Number(network.chainId) : DEFAULT_CHAIN_ID;
-                const address = getPolicyManagerAddress(chainId);
-                setPolicyManagerAddress(address);
+                const instance = await LayerCoverSDK.create(signer, { apiBaseUrl });
+                setSdk(instance);
                 setChainError('');
             } catch (e: any) {
-                console.error('Failed to resolve chain:', e);
+                console.error('Failed to initialize SDK:', e);
                 setChainError(e.message || 'Unsupported network');
             }
         };
-        resolveAddress();
-    }, [signer]);
+        initSdk();
+    }, [signer, apiBaseUrl]);
+
     const [activeTab, setActiveTab] = useState(0);
     const [amount, setAmount] = useState('');
     const [weeks, setWeeks] = useState(4);
-    const [quote, setQuote] = useState<Quote | null>(null);
+    const [bestQuote, setBestQuote] = useState<FixedRateQuote | null>(null);
+    const [estimatedPremium, setEstimatedPremium] = useState<bigint | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [txStatus, setTxStatus] = useState('');
@@ -269,7 +214,8 @@ export function BuyCoverModal({
         if (open) {
             setError('');
             setTxStatus('');
-            setQuote(null);
+            setBestQuote(null);
+            setEstimatedPremium(null);
             setActiveTab(0);
         }
     }, [open]);
@@ -277,12 +223,11 @@ export function BuyCoverModal({
     // Fetch pool metadata when modal opens
     useEffect(() => {
         const fetchMetadata = async () => {
-            if (!open || !signer || !policyManagerAddress) {
+            if (!open || !sdk) {
                 return;
             }
             setMetadataLoading(true);
             try {
-                const sdk = new LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl });
                 const metadata = await sdk.getPoolMetadata(poolId);
                 setPoolMetadata(metadata);
             } catch (e: any) {
@@ -293,26 +238,44 @@ export function BuyCoverModal({
             }
         };
         fetchMetadata();
-    }, [open, signer, policyManagerAddress, poolId]);
+    }, [open, sdk, poolId]);
 
     // Auto-fetch quote when amount or weeks change
     useEffect(() => {
         const fetchQuote = async () => {
-            if (!signer || !amount || Number(amount) <= 0) {
-                setQuote(null);
+            if (!sdk || !amount || Number(amount) <= 0) {
+                setBestQuote(null);
+                setEstimatedPremium(null);
                 return;
             }
 
             try {
-                const sdk = new LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl });
+                const quotes = await sdk.getFixedRateQuotes(poolId);
+                // Get best (cheapest) active quote
+                const activeQuotes = quotes
+                    .filter(q => q.status === 'active' && !LayerCoverSDK.isQuoteExpired(q))
+                    .sort((a, b) => a.premiumRateBps - b.premiumRateBps);
+
+                if (activeQuotes.length === 0) {
+                    setBestQuote(null);
+                    setEstimatedPremium(null);
+                    setError('No active quotes available for this pool');
+                    return;
+                }
+
+                const best = activeQuotes[0];
+                setBestQuote(best);
+
+                // Calculate premium for display
                 const amountBigInt = parseUnits(amount, tokenDecimals);
-                const days = weeks * 7;
-                const q = await sdk.getQuote(poolId, amountBigInt, days);
-                setQuote(q);
+                const durationSeconds = weeks * 7 * 24 * 60 * 60;
+                const premium = sdk.calculatePremium(amountBigInt, best.premiumRateBps, durationSeconds);
+                setEstimatedPremium(premium);
                 setError('');
             } catch (e: any) {
                 console.error(e);
-                setQuote(null);
+                setBestQuote(null);
+                setEstimatedPremium(null);
                 const decoded = decodeError(e);
                 if (decoded !== 'Transaction was rejected by user.') {
                     setError(decoded);
@@ -322,27 +285,26 @@ export function BuyCoverModal({
 
         const debounce = setTimeout(fetchQuote, 500);
         return () => clearTimeout(debounce);
-    }, [amount, weeks, signer, policyManagerAddress, poolId, tokenDecimals]);
+    }, [amount, weeks, sdk, poolId, tokenDecimals]);
 
     const handlePurchase = async () => {
-        if (!signer || !quote) return;
+        if (!sdk || !bestQuote) return;
         setLoading(true);
         setTxStatus('Purchasing...');
 
         try {
-            const sdk = new LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl });
+            const amountBigInt = parseUnits(amount, tokenDecimals);
 
             // Use the unified purchase method which handles both on-chain and intent-based purchases
             const result = await sdk.purchase(
                 poolId,
-                quote.amount,
+                amountBigInt,
                 weeks,
                 undefined, // maxRateBps - let it use best available
                 referralCode
             );
 
             setTxStatus('Success! Cover purchased.');
-            console.log('Purchase result:', result);
             onSuccess?.();
             setTimeout(onClose, 2000);
         } catch (e: any) {
@@ -499,7 +461,7 @@ export function BuyCoverModal({
                             </Box>
 
                             {/* Transaction Overview */}
-                            {quote && (
+                            {bestQuote && estimatedPremium !== null && (
                                 <Box>
                                     <Typography variant="body2" fontWeight="medium" mb={1}>
                                         Transaction overview
@@ -517,7 +479,7 @@ export function BuyCoverModal({
                                                     Premium Rate
                                                 </Typography>
                                                 <Typography variant="body2" fontWeight="medium">
-                                                    {(quote.rateBps / 100).toFixed(2)}% APY
+                                                    {(bestQuote.premiumRateBps / 100).toFixed(2)}% APY
                                                 </Typography>
                                             </Stack>
                                             <Stack direction="row" justifyContent="space-between">
@@ -525,7 +487,7 @@ export function BuyCoverModal({
                                                     Estimated Cost ({weeks}w)
                                                 </Typography>
                                                 <Typography variant="body2" fontWeight="medium">
-                                                    {formatUnits(quote.premium, tokenDecimals)} {tokenSymbol}
+                                                    {formatUnits(estimatedPremium, tokenDecimals)} {tokenSymbol}
                                                 </Typography>
                                             </Stack>
                                             <Stack direction="row" justifyContent="space-between" alignItems="center">
@@ -541,7 +503,7 @@ export function BuyCoverModal({
                                                         />
                                                     )}
                                                     <Typography variant="body2" fontWeight="medium">
-                                                        {formatUnits(quote.amount, tokenDecimals)} {tokenSymbol}
+                                                        {amount} {tokenSymbol}
                                                     </Typography>
                                                 </Stack>
                                             </Stack>
@@ -587,16 +549,16 @@ export function BuyCoverModal({
                                 size="large"
                                 fullWidth
                                 onClick={handlePurchase}
-                                disabled={loading || !quote || !amount}
+                                disabled={loading || !bestQuote || !amount}
                                 sx={{
                                     py: 1.5,
                                     borderRadius: theme.inputBorderRadius / 4,
-                                    background: quote
+                                    background: bestQuote
                                         ? theme.buttonGradient
                                         : undefined,
                                     color: theme.buttonTextColor || '#ffffff',
                                     '&:hover': {
-                                        background: quote
+                                        background: bestQuote
                                             ? theme.buttonGradientHover
                                             : undefined,
                                     },
@@ -604,7 +566,7 @@ export function BuyCoverModal({
                             >
                                 {loading ? (
                                     <CircularProgress size={24} color="inherit" />
-                                ) : quote ? (
+                                ) : bestQuote ? (
                                     'Confirm Transaction'
                                 ) : (
                                     'Enter amount to get quote'

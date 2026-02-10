@@ -6,7 +6,8 @@
  * to match their application's branding.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.presetThemes = exports.carbonTheme = exports.compoundTheme = exports.eulerTheme = exports.aaveTheme = exports.darkTheme = exports.lightTheme = exports.createTheme = exports.defaultTheme = void 0;
+exports.presetThemes = exports.carbonTheme = exports.compoundTheme = exports.eulerTheme = exports.aaveTheme = exports.darkTheme = exports.lightTheme = exports.defaultTheme = void 0;
+exports.createTheme = createTheme;
 /**
  * Default LayerCover theme with blue gradient accents
  */
@@ -50,7 +51,6 @@ function createTheme(overrides) {
         ...overrides,
     };
 }
-exports.createTheme = createTheme;
 // ============================================================================
 // EXAMPLE THEMES
 // ============================================================================
@@ -176,3 +176,4 @@ exports.presetThemes = {
     compound: exports.compoundTheme,
     carbon: exports.carbonTheme,
 };
+//# sourceMappingURL=theme.js.map

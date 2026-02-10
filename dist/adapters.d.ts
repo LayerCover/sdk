@@ -22,3 +22,4 @@ export declare class EthersV5Adapter {
      */
     static fromSigner(v5Signer: any): Promise<JsonRpcSigner>;
 }
+//# sourceMappingURL=adapters.d.ts.map

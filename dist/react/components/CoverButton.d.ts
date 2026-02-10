@@ -40,3 +40,4 @@ export interface CoverButtonProps {
  * ```
  */
 export declare function CoverButton({ signer, poolId, availableBalance, onSuccess, theme, buttonText, disabled, buttonProps, referralCode, apiBaseUrl, }: CoverButtonProps): import("react/jsx-runtime").JSX.Element;
+//# sourceMappingURL=CoverButton.d.ts.map

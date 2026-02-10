@@ -1,19 +1,20 @@
 {
     "name": "@layercover/sdk",
-    "version": "0.3.0",
+    "version": "0.5.0",
     "description": "LayerCover SDK for seamless insurance integration",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+    "sideEffects": false,
     "exports": {
         ".": {
-            "import": "./dist/index.js",
-            "require": "./dist/index.js",
-            "types": "./dist/index.d.ts"
+            "types": "./dist/index.d.ts",
+            "import": "./dist/esm/index.js",
+            "require": "./dist/index.js"
         },
         "./react": {
-            "import": "./dist/react/index.js",
-            "require": "./dist/react/index.js",
-            "types": "./dist/react/index.d.ts"
+            "types": "./dist/react/index.d.ts",
+            "import": "./dist/esm/react/index.js",
+            "require": "./dist/react/index.js"
         },
         "./dist/*": "./dist/*"
     },
@@ -24,10 +25,18 @@
         "CHANGELOG.md"
     ],
     "scripts": {
-        "build": "tsc",
+        "build": "tsc && tsc -p tsconfig.esm.json",
+        "build:cjs": "tsc",
+        "build:esm": "tsc -p tsconfig.esm.json",
         "clean": "rm -rf dist",
         "prepublishOnly": "npm run clean && npm run build",
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:build": "node tests/test-dual-build.mjs",
+        "test:legacy": "npx tsx tests/sdk-test.ts",
+        "changeset": "changeset",
+        "version": "changeset version",
+        "release": "npm run build && changeset publish"
     },
     "repository": {
         "type": "git",
@@ -41,11 +50,20 @@
         "ethers": "^6.15.0"
     },
     "peerDependencies": {
-        "@mui/icons-material": "^5.0.0",
-        "@mui/material": "^5.0.0",
-        "react": "^17.0.0 || ^18.0.0"
+        "@emotion/react": "^11.0.0",
+        "@emotion/styled": "^11.0.0",
+        "@mui/icons-material": "^5.0.0 || ^6.0.0 || ^7.0.0",
+        "@mui/material": "^5.0.0 || ^6.0.0 || ^7.0.0",
+        "react": "^17.0.0 || ^18.0.0 || ^19.0.0",
+        "viem": "^2.0.0"
     },
     "peerDependenciesMeta": {
+        "@emotion/react": {
+            "optional": true
+        },
+        "@emotion/styled": {
+            "optional": true
+        },
         "@mui/icons-material": {
             "optional": true
         },
@@ -53,6 +71,9 @@
             "optional": true
         },
         "react": {
+            "optional": true
+        },
+        "viem": {
             "optional": true
         }
     },
@@ -64,7 +85,8 @@
         "@types/node": "^25.0.3",
         "@types/react": "^18.3.27",
         "react": "^19.2.3",
-        "typescript": "^4.9.5"
+        "typescript": "^5.0.0",
+        "vitest": "^4.0.18"
     },
     "keywords": [
         "insurance",

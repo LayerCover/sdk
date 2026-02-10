@@ -1,11 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
-import { LayerCoverSDK, FixedRateQuote, PurchaseResult } from '../../index';
-import type { Signer } from 'ethers';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { LayerCoverSDK, FixedRateQuote, PurchaseResult, CoveragePool } from '../../index';
+import { getHumanError } from '../../errors';
+import type { Signer, Provider } from 'ethers';
 
 export interface UseLayerCoverOptions {
-    signer?: Signer;
-    policyManagerAddress: string;
-    poolId: number;
+    /** Ethers v6 signer (for purchases) or provider (for read-only) */
+    signer?: Signer | Provider;
+    /** Policy manager address — optional if using SDK.create() auto-config */
+    policyManagerAddress?: string;
+    /** Pool ID to fetch quotes for (optional: omit to browse pools first) */
+    poolId?: number;
+    /** Token decimals (default: 6 for USDC) */
     decimals?: number;
     /** Optional API base URL (default: https://app.layercover.com) */
     apiBaseUrl?: string;
@@ -13,32 +18,65 @@ export interface UseLayerCoverOptions {
     deployment?: string;
     /** Optional referral code (bytes32 hex string) */
     referralCode?: string;
+    /** Auto-refresh quotes interval in ms (default: 30000, set 0 to disable) */
+    refreshIntervalMs?: number;
 }
 
 export interface UseLayerCoverResult {
     sdk: LayerCoverSDK | null;
-    /** Available fixed-rate quotes */
+
+    // ── Pool Discovery ──────────────────────────────────────────
+    /** Available pools (populated when no poolId is provided, or via discoverPools) */
+    pools: CoveragePool[];
+    /** Manually trigger pool discovery */
+    discoverPools: () => Promise<void>;
+
+    // ── Quotes ──────────────────────────────────────────────────
+    /** Active (non-expired) quotes, sorted by rate */
     quotes: FixedRateQuote[];
     /** Currently selected quote */
     selectedQuote: FixedRateQuote | null;
     /** Best available rate in basis points */
     bestRate: number | null;
-    loading: boolean;
-    error: string;
-    /** Fetch available quotes for the pool */
-    fetchQuotes: () => Promise<void>;
     /** Select a specific quote */
     selectQuote: (quote: FixedRateQuote | null) => void;
+    /** Manually refresh quotes */
+    fetchQuotes: () => Promise<void>;
+
+    // ── Premium & Purchase ──────────────────────────────────────
     /** Calculate premium for given amount and duration */
     calculatePremium: (amount: string, durationWeeks: number) => bigint | null;
     /** Purchase coverage */
     purchase: (amount: string, durationWeeks: number, onApprove?: () => void, onPurchase?: () => void) => Promise<PurchaseResult | null>;
     txStatus: string;
+
+    // ── State ───────────────────────────────────────────────────
+    loading: boolean;
+    error: string;
 }
 
 /**
  * React hook for interacting with LayerCover SDK.
- * Provides fixed-rate quote fetching and purchase functionality.
+ *
+ * Provides pool discovery, live auto-refreshing quotes, and purchase functionality.
+ *
+ * @example Basic usage with poolId
+ * ```tsx
+ * const { quotes, bestRate, purchase } = useLayerCover({
+ *     signer,
+ *     poolId: 1,
+ *     apiBaseUrl: 'https://app.layercover.com',
+ * });
+ * ```
+ *
+ * @example Pool discovery mode (no poolId)
+ * ```tsx
+ * const { pools, discoverPools, quotes, purchase } = useLayerCover({
+ *     signer,
+ *     apiBaseUrl: 'https://app.layercover.com',
+ * });
+ * // pools is populated automatically — user picks one, then you set poolId
+ * ```
  */
 export function useLayerCover({
     signer,
@@ -48,64 +86,129 @@ export function useLayerCover({
     apiBaseUrl,
     deployment,
     referralCode,
+    refreshIntervalMs = 30_000,
 }: UseLayerCoverOptions): UseLayerCoverResult {
     const [sdk, setSdk] = useState<LayerCoverSDK | null>(null);
+    const [pools, setPools] = useState<CoveragePool[]>([]);
     const [quotes, setQuotes] = useState<FixedRateQuote[]>([]);
     const [selectedQuote, setSelectedQuote] = useState<FixedRateQuote | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [txStatus, setTxStatus] = useState('');
+    const stopWatchRef = useRef<(() => void) | null>(null);
 
-    // Initialize SDK when signer is available
+    // Initialize SDK — supports both direct constructor and auto-config
     useEffect(() => {
-        if (signer && policyManagerAddress) {
-            try {
-                const instance = new LayerCoverSDK(signer as any, policyManagerAddress, {
-                    apiBaseUrl,
-                    deployment,
-                });
-                setSdk(instance);
-            } catch (e: any) {
-                setError(e.message || 'Failed to initialize SDK');
+        let cancelled = false;
+
+        const init = async () => {
+            if (!signer) {
+                setSdk(null);
+                return;
             }
-        } else {
-            setSdk(null);
-        }
+
+            try {
+                let instance: LayerCoverSDK;
+
+                if (policyManagerAddress) {
+                    // Direct constructor (backward compatible)
+                    instance = new LayerCoverSDK(signer as any, policyManagerAddress, {
+                        apiBaseUrl,
+                        deployment,
+                    });
+                } else {
+                    // Auto-config via SDK.create()
+                    instance = await LayerCoverSDK.create(signer as any, {
+                        apiBaseUrl,
+                        deployment,
+                    });
+                }
+
+                if (!cancelled) {
+                    setSdk(instance);
+                }
+            } catch (e: any) {
+                if (!cancelled) {
+                    setError(getHumanError(e));
+                }
+            }
+        };
+
+        init();
+        return () => { cancelled = true; };
     }, [signer, policyManagerAddress, apiBaseUrl, deployment]);
 
-    // Fetch quotes when SDK and poolId are ready
+    // Pool discovery — auto-fetch when no poolId is set
+    const discoverPools = useCallback(async () => {
+        if (!sdk) return;
+        try {
+            setLoading(true);
+            const poolList = await sdk.listPools();
+            setPools(poolList);
+        } catch (e: any) {
+            setError(getHumanError(e));
+        } finally {
+            setLoading(false);
+        }
+    }, [sdk]);
+
+    useEffect(() => {
+        if (sdk && !poolId) {
+            discoverPools();
+        }
+    }, [sdk, poolId, discoverPools]);
+
+    // Quote watching with auto-refresh — activated when poolId is set
     const fetchQuotes = useCallback(async () => {
-        if (!sdk) {
+        if (!sdk || !poolId) {
             setQuotes([]);
             return;
         }
-
         setLoading(true);
         setError('');
-
         try {
-            const fetchedQuotes = await sdk.getFixedRateQuotes(poolId);
-            setQuotes(fetchedQuotes);
-
-            // Auto-select best quote if none selected
-            if (fetchedQuotes.length > 0 && !selectedQuote) {
-                setSelectedQuote(fetchedQuotes[0]);
+            const fetched = await sdk.getFixedRateQuotes(poolId);
+            const active = fetched
+                .filter(q => !LayerCoverSDK.isQuoteExpired(q) && q.status === 'active');
+            const sorted = LayerCoverSDK.sortQuotesByRate(active);
+            setQuotes(sorted);
+            if (sorted.length > 0 && !selectedQuote) {
+                setSelectedQuote(sorted[0]);
             }
         } catch (e: any) {
-            console.error('Fetch quotes error:', e);
             setQuotes([]);
-            setError(e.message || 'Failed to fetch quotes');
+            setError(getHumanError(e));
         } finally {
             setLoading(false);
         }
     }, [sdk, poolId, selectedQuote]);
 
-    // Auto-fetch quotes on mount
+    // Set up watchQuotes auto-refresh
     useEffect(() => {
-        if (sdk && poolId) {
-            fetchQuotes();
+        // Clean up previous watcher
+        if (stopWatchRef.current) {
+            stopWatchRef.current();
+            stopWatchRef.current = null;
         }
-    }, [sdk, poolId]); // Note: intentionally not including fetchQuotes to avoid loop
+
+        if (!sdk || !poolId || refreshIntervalMs <= 0) return;
+
+        const stop = sdk.watchQuotes(poolId, (freshQuotes) => {
+            setQuotes(freshQuotes);
+            if (freshQuotes.length > 0) {
+                setSelectedQuote(prev =>
+                    prev ? freshQuotes.find(q => q.id === prev.id) || freshQuotes[0] : freshQuotes[0]
+                );
+            }
+        }, { refreshIntervalMs });
+
+        stopWatchRef.current = stop;
+
+        return () => {
+            stop();
+            stopWatchRef.current = null;
+        };
+    }, [sdk, poolId, refreshIntervalMs]);
 
     const selectQuote = useCallback((quote: FixedRateQuote | null) => {
         setSelectedQuote(quote);
@@ -116,14 +219,12 @@ export function useLayerCover({
             if (!sdk || !selectedQuote || !amount || Number(amount) <= 0) {
                 return null;
             }
-
             try {
                 const { parseUnits } = require('ethers');
                 const amountBigInt = parseUnits(amount, decimals);
                 const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
                 return sdk.calculatePremium(amountBigInt, selectedQuote.premiumRateBps, durationSeconds);
-            } catch (e) {
-                console.error('Calculate premium error:', e);
+            } catch {
                 return null;
             }
         },
@@ -141,9 +242,8 @@ export function useLayerCover({
                 setError('SDK or signer not available');
                 return null;
             }
-
             if (!selectedQuote) {
-                setError('No quote selected. Please fetch and select a quote first.');
+                setError('No quote selected.');
                 return null;
             }
 
@@ -156,7 +256,6 @@ export function useLayerCover({
                 const coverageAmount = parseUnits(amount, decimals);
                 const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
 
-                // Calculate premium
                 const premium = sdk.calculatePremium(
                     coverageAmount,
                     selectedQuote.premiumRateBps,
@@ -164,20 +263,16 @@ export function useLayerCover({
                 );
                 const premiumWithBuffer = (premium * 105n) / 100n;
 
-                // Approve
                 setTxStatus('Approving...');
-                const approveTx = await sdk.prepareApprovalTx(poolId, premiumWithBuffer);
+                const approveTx = await sdk.prepareApprovalTx(poolId!, premiumWithBuffer);
                 const approveResult = await (signer as any).sendTransaction(approveTx);
                 await approveResult.wait();
                 onApprove?.();
 
-                // Purchase
                 setTxStatus('Purchasing...');
-
                 let result: PurchaseResult;
 
                 if (selectedQuote.orderId) {
-                    // Use buyFromQuote for on-chain orders
                     const purchaseTx = await sdk.prepareBuyFromQuoteTx(
                         selectedQuote.orderId,
                         coverageAmount,
@@ -185,10 +280,9 @@ export function useLayerCover({
                         referralCode
                     );
                     const purchaseResult = await (signer as any).sendTransaction(purchaseTx);
-                    const receipt = await purchaseResult.wait();
+                    await purchaseResult.wait();
                     result = { txHash: purchaseResult.hash };
                 } else {
-                    // Use full intent flow
                     result = await sdk.purchaseWithIntent(
                         selectedQuote,
                         coverageAmount,
@@ -199,28 +293,24 @@ export function useLayerCover({
 
                 onPurchase?.();
                 setTxStatus('Success! Cover purchased.');
-
-                // Refresh quotes after purchase
-                await fetchQuotes();
-
                 return result;
             } catch (e: any) {
-                console.error('Purchase error:', e);
                 setTxStatus('');
-                setError(e.message || 'Purchase failed');
+                setError(getHumanError(e));
                 return null;
             } finally {
                 setLoading(false);
             }
         },
-        [sdk, signer, selectedQuote, poolId, decimals, fetchQuotes]
+        [sdk, signer, selectedQuote, poolId, decimals, referralCode]
     );
 
-    // Computed: best rate
     const bestRate = quotes.length > 0 ? quotes[0].premiumRateBps : null;
 
     return {
         sdk,
+        pools,
+        discoverPools,
         quotes,
         selectedQuote,
         bestRate,

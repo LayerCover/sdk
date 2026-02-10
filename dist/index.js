@@ -14,11 +14,27 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LayerCoverSDK = exports.NoQuotesAvailableError = exports.RateTooHighError = exports.DEFAULT_API_BASE_URL = exports.DEFAULT_CHAIN_ID = exports.getIntentOrderBookAddress = exports.getPolicyManagerAddress = exports.CONTRACT_ADDRESSES = exports.getTokenLogoUrl = exports.TOKEN_LOGOS = exports.POOL_CONFIG = void 0;
+exports.LayerCoverSDK = exports.NoQuotesAvailableError = exports.RateTooHighError = exports.DEFAULT_API_BASE_URL = exports.DEFAULT_CHAIN_ID = exports.CONTRACT_ADDRESSES = exports.TOKEN_LOGOS = exports.POOL_CONFIG = exports.getHumanError = exports.ERROR_MESSAGES = void 0;
+exports.getTokenLogoUrl = getTokenLogoUrl;
+exports.getPolicyManagerAddress = getPolicyManagerAddress;
+exports.getIntentOrderBookAddress = getIntentOrderBookAddress;
 const ethers_1 = require("ethers");
+const errors_1 = require("./errors");
 __exportStar(require("./adapters"), exports);
+__exportStar(require("./viem-adapter"), exports);
+var errors_2 = require("./errors");
+Object.defineProperty(exports, "ERROR_MESSAGES", { enumerable: true, get: function () { return errors_2.ERROR_MESSAGES; } });
+Object.defineProperty(exports, "getHumanError", { enumerable: true, get: function () { return errors_2.getHumanError; } });
 const BPS = 10000n;
-const SECS_YEAR = 31536000n;
+const SECS_YEAR = 31536000n; // 365 days exactly — canonical for premium math
+const NOOP_LOG = () => { };
+function createLogger(debug) {
+    if (typeof debug === 'object' && debug !== null)
+        return debug;
+    if (debug)
+        return { debug: console.log.bind(console), warn: console.warn.bind(console), error: console.error.bind(console) };
+    return { debug: NOOP_LOG, warn: NOOP_LOG, error: console.error.bind(console) };
+}
 /**
  * Static pool configuration for off-chain metadata (logos, display names)
  * This can be extended or overridden by integrators
@@ -70,7 +86,6 @@ function getTokenLogoUrl(symbol) {
     }
     return DEFAULT_TOKEN_LOGO;
 }
-exports.getTokenLogoUrl = getTokenLogoUrl;
 const DEFAULT_POOL_CONFIG = {
     poolName: 'LayerCover Protection',
 };
@@ -80,16 +95,13 @@ const USDC_LOGO_URL = 'https://cryptologos.cc/logos/usd-coin-usdc-logo.png';
  * Key is chainId
  */
 exports.CONTRACT_ADDRESSES = {
-    // Base Sepolia (testnet)
+    // Base Sepolia (testnet) — synced with /api/config as of Feb 2026
     84532: {
-        policyManager: '0x33807f8c7b35E7233e33aFCDB6b3fea0C535c015',
-        intentOrderBook: '0x6952Df9bf4615b73B005C79AB19FD53385eD96ae',
+        policyManager: '0xbd0Cb34253c84201F746F0A9DF062d82c0823c56',
+        intentOrderBook: '0x7865f2e07dFe0d4dC4345bF5DFFFAd757a901337',
     },
-    // Base Mainnet (future)
-    8453: {
-        policyManager: '0x0000000000000000000000000000000000000000',
-        intentOrderBook: '0x0000000000000000000000000000000000000000',
-    },
+    // Base Mainnet — addresses will be populated at mainnet launch.
+    // Intentionally omitted to prevent silent misconfiguration.
 };
 /**
  * Get the PolicyManager address for a given chain
@@ -103,7 +115,6 @@ function getPolicyManagerAddress(chainId) {
     }
     return addresses.policyManager;
 }
-exports.getPolicyManagerAddress = getPolicyManagerAddress;
 /**
  * Get the IntentOrderBook address for a given chain
  * @param chainId The chain ID
@@ -116,7 +127,6 @@ function getIntentOrderBookAddress(chainId) {
     }
     return addresses.intentOrderBook;
 }
-exports.getIntentOrderBookAddress = getIntentOrderBookAddress;
 /**
  * Default chain ID for LayerCover (Base Sepolia testnet)
  */
@@ -125,6 +135,10 @@ exports.DEFAULT_CHAIN_ID = 84532;
  * Default API base URL for LayerCover
  */
 exports.DEFAULT_API_BASE_URL = 'https://app.layercover.com';
+/**
+ * Thrown when the best available premium rate exceeds the caller's maximum.
+ * Contains both the actual rate and the requested ceiling for UI messaging.
+ */
 class RateTooHighError extends Error {
     constructor(message, rate, maxRate) {
         super(message);
@@ -134,6 +148,10 @@ class RateTooHighError extends Error {
     }
 }
 exports.RateTooHighError = RateTooHighError;
+/**
+ * Thrown when no underwriter quotes are available for a pool.
+ * This typically means no syndicates are currently offering coverage.
+ */
 class NoQuotesAvailableError extends Error {
     constructor(message /* , public poolId: number */) {
         super(message);
@@ -144,6 +162,24 @@ exports.NoQuotesAvailableError = NoQuotesAvailableError;
 // ============================================================================
 // MAIN SDK CLASS
 // ============================================================================
+/**
+ * Main entry point for interacting with the LayerCover protocol.
+ *
+ * Provides methods for pool discovery, quote fetching, coverage purchasing,
+ * policy management, and syndicate operations. Supports both read-only
+ * (provider) and write (signer) modes.
+ *
+ * @example
+ * ```ts
+ * // Recommended: auto-fetch config
+ * const sdk = await LayerCoverSDK.create(signer, { chainId: 84532 });
+ *
+ * // List pools and buy coverage
+ * const pools = await sdk.listPools({ category: 'vault_cover' });
+ * const quotes = await sdk.getFixedRateQuotes(pools[0].poolId);
+ * const result = await sdk.purchase(pools[0].poolId, amount, 4);
+ * ```
+ */
 class LayerCoverSDK {
     constructor(providerOrSigner, policyManagerAddress, options = {}) {
         if ('signMessage' in providerOrSigner) {
@@ -156,26 +192,32 @@ class LayerCoverSDK {
         this._apiBaseUrl = options.apiBaseUrl || exports.DEFAULT_API_BASE_URL;
         this._deployment = options.deployment || 'base_sepolia_usdc';
         this._chainId = options.chainId || exports.DEFAULT_CHAIN_ID;
+        this._policyNFTAddress = options.policyNFTAddress;
+        this._log = createLogger(options.debug);
         this.policyManager = new ethers_1.Contract(policyManagerAddress, [
             'function poolRegistry() view returns (address)',
             'function riskManager() view returns (address)',
             'function underwriterManager() view returns (address)',
             'function rateEngine() view returns (address)',
             'function capitalPool() view returns (address)',
+            'function policyNFT() view returns (address)',
+            'function isPolicyActive(uint256 policyId) view returns (bool)',
+            'function cancelCover(uint256 policyId)',
+            'function lapsePolicy(uint256 policyId)',
         ], this.signer || this.provider);
         // Initialize IntentOrderBook
         const orderBookAddress = options.intentOrderBookAddress ||
             exports.CONTRACT_ADDRESSES[this._chainId]?.intentOrderBook;
         if (orderBookAddress && orderBookAddress !== ethers_1.ethers.ZeroAddress) {
             this.intentOrderBook = new ethers_1.Contract(orderBookAddress, [
-                // Buy from existing on-chain sell order (with referral code)
-                'function buyFromQuote(uint256 orderId, uint256 coverageAmount, uint256 duration, bool requiresUpfront, bytes32 referralCode) external returns (uint256 policyId)',
+                // Buy from existing on-chain sell order (with vault coverage support and referral code)
+                'function buyFromQuote(uint256 orderId, uint256 coverageAmount, uint256 duration, address vault, uint256 sharesToCover, bool requiresUpfront, bytes32 referralCode) external returns (uint256 policyId)',
                 // Post a buy order (with referral code)
                 'function postBuyOrder(tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode) order) external returns (uint256 orderId)',
-                // Fill a buy order with intent
-                'function fillBuyOrder(uint256 orderId, uint256 offerRateBps, uint256 fillAmount, bool requiresUpfront, tuple(address solver, address underwriter, uint256 poolId, uint256 minCoverageDuration, uint256 maxCoverageDuration, uint256 coverageAmount, uint256 minFillAmount, bool allowPartialFill, uint256 reservationExpiry, uint256 nonce, address whitelistedBuyer, bool autoAllocate) reserveIntent, bytes signature) external returns (uint256 policyId)',
+                // Fill a buy order with intent (with vault coverage support)
+                'function fillBuyOrder(uint256 orderId, uint256 offerRateBps, uint256 fillAmount, address vault, uint256 sharesToCover, bool requiresUpfront, tuple(address solver, address underwriter, uint256 poolId, uint32 minCoverageDuration, uint32 maxCoverageDuration, uint256 coverageAmount, uint256 minFillAmount, bool allowPartialFill, uint64 reservationExpiry, uint96 nonce, address whitelistedBuyer, uint16 minPremiumBps, uint16 cancellationPenaltyBps) reserveIntent, bytes signature) external returns (uint256 policyId)',
                 // Get sell order details
-                'function getSellOrder(uint256 orderId) view returns (tuple(address syndicate, address solver, uint256 poolId, uint256 minCoverageDuration, uint256 maxCoverageDuration, uint256 remainingCoverage, uint256 minFillAmount, uint256 rateBps, uint64 expiry, bytes32 reservationKey, bool cancelled, bool filled))',
+                'function getSellOrder(uint256 orderId) view returns (tuple(address syndicate, address solver, uint256 poolId, uint256 minCoverageDuration, uint256 maxCoverageDuration, uint256 remainingCoverage, uint256 minFillAmount, uint256 rateBps, uint64 expiry, bytes32 reservationKey, bool cancelled, bool filled, uint16 cancellationPenaltyBps))',
                 'function getUnfilledSellOrders(uint256 poolId) view returns (uint256[])',
             ], this.signer || this.provider);
         }
@@ -196,10 +238,10 @@ class LayerCoverSDK {
         if (options.deployment)
             params.set('deployment', options.deployment);
         const url = `${apiBase}/api/config${params.toString() ? '?' + params.toString() : ''}`;
-        console.log('[LayerCover SDK] Fetching config from:', url);
+        // Debug logging handled per-instance; static method uses console sparingly
         const response = await fetch(url);
         if (!response.ok) {
-            console.warn('[LayerCover SDK] Failed to fetch config, using fallback addresses');
+            // Fallback silently — integrators can detect via returned config
             // Fallback to hardcoded addresses
             const chainId = options.chainId || exports.DEFAULT_CHAIN_ID;
             const addresses = exports.CONTRACT_ADDRESSES[chainId];
@@ -216,12 +258,33 @@ class LayerCoverSDK {
             };
         }
         const data = await response.json();
+        // Handle both formats:
+        //   1. Direct: { contracts: {...}, chainId, ... }
+        //   2. Deployments array: { deployments: [{ name, chainId, contracts }] }
+        let contracts = data.contracts;
+        let resolvedChainId = data.chainId || options.chainId || exports.DEFAULT_CHAIN_ID;
+        let resolvedDeployment = data.deployment || options.deployment;
+        if (!contracts && data.deployments && Array.isArray(data.deployments)) {
+            // Find the best matching deployment
+            const targetDeployment = options.deployment || 'base_sepolia_usdc';
+            const match = data.deployments.find((d) => d.name === targetDeployment)
+                || data.deployments.find((d) => d.chainId === (options.chainId || exports.DEFAULT_CHAIN_ID))
+                || data.deployments[0];
+            if (match) {
+                contracts = match.contracts;
+                resolvedChainId = match.chainId || resolvedChainId;
+                resolvedDeployment = match.name || resolvedDeployment;
+            }
+        }
+        if (!contracts) {
+            throw new Error('No contracts found in API config response');
+        }
         // Cache the config for 5 minutes
         LayerCoverSDK._cachedConfig = {
-            contracts: data.contracts,
-            chainId: data.chainId || options.chainId || exports.DEFAULT_CHAIN_ID,
+            contracts,
+            chainId: resolvedChainId,
             apiBaseUrl: data.apiBaseUrl || apiBase,
-            deployment: data.deployment || options.deployment,
+            deployment: resolvedDeployment,
             fetchedAt: Date.now(),
         };
         return LayerCoverSDK._cachedConfig;
@@ -253,7 +316,8 @@ class LayerCoverSDK {
             : await LayerCoverSDK.fetchConfig(options);
         return new LayerCoverSDK(providerOrSigner, config.contracts.policyManager, {
             intentOrderBookAddress: config.contracts.intentOrderBook,
-            apiBaseUrl: config.apiBaseUrl,
+            policyNFTAddress: config.contracts.policyNFT,
+            apiBaseUrl: options.apiBaseUrl || config.apiBaseUrl,
             chainId: config.chainId,
             deployment: config.deployment,
         });
@@ -268,9 +332,9 @@ class LayerCoverSDK {
      */
     async getFixedRateQuotes(poolId) {
         const url = `${this._apiBaseUrl}/api/quotes?poolId=${poolId}&deployment=${this._deployment}`;
-        console.log('[LayerCover SDK] Fetching quotes from:', url);
+        this._log.debug('[LayerCover SDK] Fetching quotes from:', url);
         const response = await fetch(url);
-        console.log('[LayerCover SDK] Response status:', response.status);
+        this._log.debug('[LayerCover SDK] Response status:', response.status);
         if (!response.ok) {
             throw new Error(`Failed to fetch quotes: ${response.status} ${response.statusText}`);
         }
@@ -318,9 +382,11 @@ class LayerCoverSDK {
             throw new Error(errorData.error || `Failed to refresh quote: ${response.status}`);
         }
         const data = await response.json();
+        // API returns coverageIntent, normalize to reserveIntent shape
+        const intent = data.reserveIntent || data.coverageIntent;
         return {
-            reserveIntent: data.reserveIntent,
-            signature: data.signature,
+            reserveIntent: intent,
+            signature: data.signature || data.intentSignature,
         };
     }
     /**
@@ -347,6 +413,160 @@ class LayerCoverSDK {
         return quotes[0].premiumRateBps;
     }
     // ========================================================================
+    // POOL DISCOVERY METHODS
+    // ========================================================================
+    /**
+     * List all available coverage pools with enriched metadata.
+     * This is the primary discovery method for 3rd-party integrators — no need
+     * to know pool IDs upfront.
+     *
+     * @param options Optional filters (category, type, includeDeprecated, onlyWithCoverage)
+     * @returns Array of enriched CoveragePool objects
+     *
+     * @example
+     * ```typescript
+     * // Get all active pools
+     * const pools = await sdk.listPools();
+     *
+     * // Get only vault cover pools
+     * const vaultPools = await sdk.listPools({ category: 'vault_cover' });
+     *
+     * // Get only stablecoin pools with available coverage
+     * const stablePools = await sdk.listPools({ type: 'stablecoin', onlyWithCoverage: true });
+     * ```
+     */
+    async listPools(options = {}) {
+        const url = `${this._apiBaseUrl}/api/pools/list?deployment=${encodeURIComponent(this._deployment)}`;
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch pools: ${response.status} ${response.statusText}`);
+        }
+        const data = await response.json();
+        const rawPools = data.pools || [];
+        let pools = rawPools.map((p) => ({
+            poolId: p.poolId ?? p.id,
+            name: p.poolName || p.label || `Pool ${p.poolId ?? p.id}`,
+            category: p.category || 'other',
+            type: p.type || p.poolCategory || 'unknown',
+            subCategory: p.subCategory,
+            availableCoverage: String(p.availableCoverage || '0'),
+            totalCoverageSold: String(p.totalCoverageSold || '0'),
+            bestRateBps: Number(p.premiumRateBps || 0),
+            riskRating: String(p.riskRating || '—'),
+            slug: p.slug || '',
+            tokenSymbol: p.underlyingTokenSymbol || p.label || '',
+            tokenLogoUrl: p.metadata?.logo || p.metadata?.protocolLogo || getTokenLogoUrl(p.underlyingTokenSymbol || p.label || ''),
+            isOptimisticOracle: Boolean(p.isOptimisticOracle),
+            deprecated: Boolean(p.deprecated),
+            deployment: p.deployment || this._deployment,
+        }));
+        // Apply filters
+        if (!options.includeDeprecated) {
+            pools = pools.filter(p => !p.deprecated);
+        }
+        if (options.category) {
+            pools = pools.filter(p => p.category === options.category);
+        }
+        if (options.type) {
+            pools = pools.filter(p => p.type === options.type);
+        }
+        if (options.onlyWithCoverage) {
+            pools = pools.filter(p => p.availableCoverage !== '0');
+        }
+        return pools;
+    }
+    /**
+     * Get a single pool by ID with enriched metadata.
+     *
+     * @param poolId The pool ID to look up
+     * @returns Enriched CoveragePool or null if not found
+     *
+     * @example
+     * ```typescript
+     * const pool = await sdk.getPool(1);
+     * console.log(pool?.name); // "DAI"
+     * console.log(pool?.category); // "stablecoin_depeg"
+     * ```
+     */
+    async getPool(poolId) {
+        const pools = await this.listPools({ includeDeprecated: true });
+        return pools.find(p => p.poolId === poolId) || null;
+    }
+    /**
+     * Get pools enriched with their best available quote.
+     * Combines pool discovery with quote fetching in a single call.
+     *
+     * @param options Optional ListPoolsOptions filters
+     * @returns Array of pools with a `bestQuote` field attached
+     *
+     * @example
+     * ```typescript
+     * const pools = await sdk.getQuotesWithPools({ category: 'vault_cover' });
+     * for (const { pool, bestQuote } of pools) {
+     *     if (bestQuote) {
+     *         console.log(`${pool.name}: ${bestQuote.premiumRateBps / 100}%`);
+     *     }
+     * }
+     * ```
+     */
+    async getQuotesWithPools(options = {}) {
+        const pools = await this.listPools(options);
+        const results = await Promise.all(pools.map(async (pool) => {
+            try {
+                const quotes = await this.getFixedRateQuotes(pool.poolId);
+                const activeQuotes = quotes.filter(q => !LayerCoverSDK.isQuoteExpired(q));
+                return {
+                    pool,
+                    bestQuote: activeQuotes.length > 0 ? activeQuotes[0] : null,
+                };
+            }
+            catch {
+                return { pool, bestQuote: null };
+            }
+        }));
+        return results;
+    }
+    // ========================================================================
+    // QUOTE LIFECYCLE HELPERS
+    // ========================================================================
+    /**
+     * Check whether a fixed-rate quote has expired.
+     *
+     * @param quote The quote to check
+     * @returns true if the quote's expiresAt is in the past
+     */
+    static isQuoteExpired(quote) {
+        if (!quote.expiresAt)
+            return false;
+        return new Date(quote.expiresAt).getTime() < Date.now();
+    }
+    /**
+     * Fetch only active (non-expired) quotes for a pool, sorted by rate.
+     *
+     * @param poolId The pool ID
+     * @returns Active quotes sorted by premiumRateBps ascending
+     *
+     * @example
+     * ```typescript
+     * const quotes = await sdk.getActiveQuotes(1);
+     * // All quotes are guaranteed non-expired
+     * ```
+     */
+    async getActiveQuotes(poolId) {
+        const quotes = await this.getFixedRateQuotes(poolId);
+        return quotes.filter(q => !LayerCoverSDK.isQuoteExpired(q) && q.status === 'active');
+    }
+    /**
+     * Sort quotes by premium rate (cheapest first).
+     * Utility for integrators who fetch quotes separately and need to re-sort.
+     *
+     * @param quotes Array of quotes to sort
+     * @returns New array sorted by premiumRateBps ascending
+     */
+    static sortQuotesByRate(quotes) {
+        return [...quotes].sort((a, b) => a.premiumRateBps - b.premiumRateBps);
+    }
+    // ========================================================================
     // PURCHASE METHODS (NEW)
     // ========================================================================
     /**
@@ -363,7 +583,9 @@ class LayerCoverSDK {
         if (!this.intentOrderBook) {
             throw new Error('IntentOrderBook not configured');
         }
-        return await this.intentOrderBook.buyFromQuote.populateTransaction(orderId, coverageAmount, durationSeconds, true, // requiresUpfront
+        return await this.intentOrderBook.buyFromQuote.populateTransaction(orderId, coverageAmount, durationSeconds, ethers_1.ethers.ZeroAddress, // vault (not used for standard coverage)
+        0, // sharesToCover (not used for standard coverage)
+        true, // requiresUpfront
         referralCode || ethers_1.ethers.ZeroHash);
     }
     /**
@@ -412,11 +634,11 @@ class LayerCoverSDK {
             taker: signerAddress,
             poolId: quote.poolId,
             coverageAmount: coverageAmount,
-            maxPremiumRateBps: Math.round(quote.premiumRateBps * 1.01),
+            maxPremiumRateBps: Math.round(quote.premiumRateBps * 1.01), // 1% slippage
             duration: durationSeconds,
             premiumDeposit: premiumWithBuffer,
             nonce: Math.floor(Date.now() / 1000),
-            expiry: Math.floor(Date.now() / 1000) + 3600,
+            expiry: Math.floor(Date.now() / 1000) + 3600, // 1 hour
             salt: Math.floor(Math.random() * 1000000),
             referralCode: referralCode || ethers_1.ethers.ZeroHash,
         };
@@ -443,21 +665,25 @@ class LayerCoverSDK {
             throw new Error('Failed to extract order ID from transaction');
         }
         // 5. Fill buy order with reserve intent
+        // Map API field names (maker/minDuration/maxDuration) to contract struct fields
         const intentStruct = {
-            solver: reserveIntent.solver,
-            underwriter: reserveIntent.underwriter,
+            solver: reserveIntent.solver || reserveIntent.maker || ethers_1.ethers.ZeroAddress,
+            underwriter: reserveIntent.underwriter || reserveIntent.maker || ethers_1.ethers.ZeroAddress,
             poolId: reserveIntent.poolId,
-            minCoverageDuration: reserveIntent.minCoverageDuration,
-            maxCoverageDuration: reserveIntent.maxCoverageDuration,
+            minCoverageDuration: reserveIntent.minCoverageDuration || reserveIntent.minDuration || 0,
+            maxCoverageDuration: reserveIntent.maxCoverageDuration || reserveIntent.maxDuration || 0,
             coverageAmount: BigInt(reserveIntent.coverageAmount),
-            minFillAmount: BigInt(reserveIntent.minFillAmount),
-            allowPartialFill: reserveIntent.allowPartialFill,
-            reservationExpiry: reserveIntent.reservationExpiry,
+            minFillAmount: BigInt(reserveIntent.minFillAmount || '0'),
+            allowPartialFill: reserveIntent.allowPartialFill ?? false,
+            reservationExpiry: reserveIntent.reservationExpiry || reserveIntent.expiry || 0,
             nonce: BigInt(reserveIntent.nonce),
             whitelistedBuyer: reserveIntent.whitelistedBuyer || ethers_1.ethers.ZeroAddress,
-            autoAllocate: reserveIntent.autoAllocate,
+            minPremiumBps: reserveIntent.minPremiumBps ?? 0,
+            cancellationPenaltyBps: reserveIntent.cancellationPenaltyBps ?? 0,
         };
-        const fillTx = await this.intentOrderBook.fillBuyOrder(orderId, quote.premiumRateBps, coverageAmount, true, // requiresUpfront
+        const fillTx = await this.intentOrderBook.fillBuyOrder(orderId, quote.premiumRateBps, coverageAmount, ethers_1.ethers.ZeroAddress, // vault (not used for standard coverage)
+        0, // sharesToCover (not used for standard coverage)
+        true, // requiresUpfront
         intentStruct, signature);
         const fillReceipt = await fillTx.wait();
         // Extract policy ID from event
@@ -493,57 +719,161 @@ class LayerCoverSDK {
      * @returns Transaction hash and policy ID
      */
     async purchase(poolId, coverageAmount, durationWeeks, maxRateBps, referralCode) {
+        if (!this.signer)
+            throw new Error('Signer required for purchase');
+        if (!this.intentOrderBook)
+            throw new Error('IntentMatcher not configured');
+        const signerAddress = await this.signer.getAddress();
+        const intentMatcherAddress = await this.intentOrderBook.getAddress();
         // 1. Fetch available quotes
         const quotes = await this.getFixedRateQuotes(poolId);
         if (quotes.length === 0) {
             throw new NoQuotesAvailableError(`No quotes available for pool ${poolId}. ` +
                 'Coverage can only be purchased when underwriters provide quotes.');
         }
-        // 2. Select best quote
         const bestQuote = quotes[0];
         if (maxRateBps && bestQuote.premiumRateBps > maxRateBps) {
             throw new RateTooHighError(`Best available rate ${bestQuote.premiumRateBps} bps exceeds max ${maxRateBps} bps`, bestQuote.premiumRateBps, maxRateBps);
         }
         const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
-        // 3. Purchase using appropriate path
-        if (bestQuote.orderId) {
-            // Use simple buyFromQuote for on-chain orders
-            if (!this.signer)
-                throw new Error('Signer required for purchase');
-            // Approve first
-            const premium = this.calculatePremium(coverageAmount, bestQuote.premiumRateBps, durationSeconds);
-            const premiumWithBuffer = (premium * 105n) / 100n;
-            const paymentToken = await this.getPaymentToken(poolId);
-            const tokenContract = new ethers_1.Contract(paymentToken, ['function approve(address spender, uint256 amount) returns (bool)'], this.signer);
-            const orderBookAddress = await this.intentOrderBook.getAddress();
-            const approveTx = await tokenContract.approve(orderBookAddress, premiumWithBuffer);
+        // 2. Refresh quote to get fresh coverageIntent + signature
+        const refreshUrl = `${this._apiBaseUrl}/api/quotes`;
+        const refreshResponse = await fetch(refreshUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                quoteId: bestQuote.id,
+                amount: coverageAmount.toString(),
+                duration: durationSeconds,
+                chainId: this._chainId,
+            }),
+        });
+        if (!refreshResponse.ok) {
+            const errorData = await refreshResponse.json().catch(() => ({}));
+            throw new Error(errorData.error || `Failed to refresh quote: ${refreshResponse.status}`);
+        }
+        const refreshData = await refreshResponse.json();
+        const coverageIntent = refreshData.coverageIntent || refreshData.reserveIntent;
+        const intentSignature = refreshData.intentSignature || refreshData.signature;
+        if (!coverageIntent || !intentSignature) {
+            throw new Error('Quote refresh failed: missing coverageIntent or signature');
+        }
+        // 3. Calculate premium with 5% buffer (uses module-level SECS_YEAR / BPS)
+        const premium = this.calculatePremium(coverageAmount, bestQuote.premiumRateBps, durationSeconds);
+        const premiumWithBuffer = (premium * 105n) / 100n;
+        // 4. Approve IntentMatcher to spend premium
+        const paymentToken = await this.getPaymentToken(poolId);
+        const tokenContract = new ethers_1.Contract(paymentToken, [
+            'function approve(address spender, uint256 amount) returns (bool)',
+            'function allowance(address owner, address spender) view returns (uint256)',
+        ], this.signer);
+        const allowance = await tokenContract.allowance(signerAddress, intentMatcherAddress);
+        if (allowance < premiumWithBuffer) {
+            this._log.debug('[LayerCover SDK] Approving premium spend…');
+            const approveTx = await tokenContract.approve(intentMatcherAddress, ethers_1.ethers.MaxUint256);
             await approveTx.wait();
-            // Execute purchase
-            const tx = await this.intentOrderBook.buyFromQuote(bestQuote.orderId, coverageAmount, durationSeconds, true, referralCode || ethers_1.ethers.ZeroHash);
-            const receipt = await tx.wait();
-            // Extract policy ID
-            const iface = new ethers_1.ethers.Interface([
-                'event SellOrderFilled(uint256 indexed orderId, address indexed buyer, uint256 amount, uint256 policyId)',
-            ]);
-            let policyId;
-            for (const log of receipt.logs) {
-                try {
-                    const parsed = iface.parseLog(log);
-                    if (parsed?.name === 'SellOrderFilled') {
-                        policyId = parsed.args.policyId.toString();
-                        break;
-                    }
-                }
-                catch {
-                    continue;
+            this._log.debug('[LayerCover SDK] Approval confirmed');
+        }
+        // 5. Build buyer order
+        const buyerOrder = {
+            taker: signerAddress,
+            poolId: poolId,
+            coverageAmount: coverageAmount,
+            maxPremiumRateBps: Math.round(bestQuote.premiumRateBps * 1.05), // 5% slippage
+            duration: durationSeconds,
+            premiumDeposit: premiumWithBuffer,
+            nonce: Math.floor(Date.now() / 1000),
+            expiry: Math.floor(Date.now() / 1000) + 3600, // 1 hour
+            salt: Math.floor(Math.random() * 1000000),
+            referralCode: referralCode || ethers_1.ethers.ZeroHash,
+        };
+        // 6. EIP-712 sign the buy order
+        const domain = {
+            name: 'IntentMatcher',
+            version: '1',
+            chainId: this._chainId,
+            verifyingContract: intentMatcherAddress,
+        };
+        const buyOrderTypes = {
+            CoverageBuyOrder: [
+                { name: 'taker', type: 'address' },
+                { name: 'poolId', type: 'uint256' },
+                { name: 'coverageAmount', type: 'uint256' },
+                { name: 'maxPremiumRateBps', type: 'uint256' },
+                { name: 'duration', type: 'uint256' },
+                { name: 'premiumDeposit', type: 'uint256' },
+                { name: 'nonce', type: 'uint256' },
+                { name: 'expiry', type: 'uint256' },
+                { name: 'salt', type: 'uint256' },
+                { name: 'referralCode', type: 'bytes32' },
+            ],
+        };
+        this._log.debug('[LayerCover SDK] Signing buy order (EIP-712)…');
+        const orderSignature = await this.signer.signTypedData(domain, buyOrderTypes, buyerOrder);
+        // 7. Build seller intent struct from coverageIntent
+        const sellerIntent = {
+            maker: coverageIntent.maker,
+            poolId: coverageIntent.poolId,
+            coverageAmount: BigInt(coverageIntent.coverageAmount),
+            premiumRateBps: coverageIntent.premiumRateBps,
+            minDuration: coverageIntent.minDuration,
+            maxDuration: coverageIntent.maxDuration,
+            nonce: BigInt(coverageIntent.nonce),
+            expiry: coverageIntent.expiry,
+            salt: BigInt(coverageIntent.salt),
+            requiresUpfront: coverageIntent.requiresUpfront ?? true,
+            cancellationPenaltyBps: coverageIntent.cancellationPenaltyBps ?? 0,
+            minFillAmount: BigInt(coverageIntent.minFillAmount ?? '0'),
+            whitelistedBuyer: coverageIntent.whitelistedBuyer || ethers_1.ethers.ZeroAddress,
+        };
+        // 8. Call executeMatchedIntent on IntentMatcher
+        const EXECUTE_MATCHED_INTENT_ABI = [
+            'function executeMatchedIntent(tuple(address maker, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 minDuration, uint256 maxDuration, uint256 nonce, uint256 expiry, uint256 salt, bool requiresUpfront, uint16 cancellationPenaltyBps, uint256 minFillAmount, address whitelistedBuyer)[] intents, bytes[] intentSignatures, tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode) order, bytes orderSignature, uint256[] fillAmounts, address vault, uint256 sharesToCover) returns (uint256[])',
+        ];
+        const intentMatcher = new ethers_1.Contract(intentMatcherAddress, EXECUTE_MATCHED_INTENT_ABI, this.signer);
+        this._log.debug('[LayerCover SDK] Executing purchase…');
+        const tx = await intentMatcher.executeMatchedIntent([sellerIntent], // intents[]
+        [intentSignature], // intentSignatures[]
+        buyerOrder, // order
+        orderSignature, // orderSignature (EIP-712 signed)
+        [coverageAmount], // fillAmounts[]
+        ethers_1.ethers.ZeroAddress, // vault (not used for standard coverage)
+        0 // sharesToCover
+        );
+        const receipt = await tx.wait();
+        this._log.debug('[LayerCover SDK] Purchase confirmed:', tx.hash);
+        // 9. Extract policy ID from PolicyCreated event
+        const policyCreatedIface = new ethers_1.ethers.Interface([
+            'event PolicyCreated(uint256 indexed policyId, address indexed holder, uint256 poolId)',
+            'event IntentMatched(uint256 indexed policyId, address indexed buyer, address indexed seller)',
+        ]);
+        let policyId;
+        for (const log of receipt.logs) {
+            try {
+                const parsed = policyCreatedIface.parseLog(log);
+                if (parsed && (parsed.name === 'PolicyCreated' || parsed.name === 'IntentMatched')) {
+                    policyId = parsed.args.policyId.toString();
+                    break;
                 }
             }
-            return { txHash: tx.hash, policyId };
+            catch {
+                continue;
+            }
         }
-        else {
-            // Use full intent flow
-            return await this.purchaseWithIntent(bestQuote, coverageAmount, durationSeconds, referralCode);
+        // Mark quote as filled
+        try {
+            await fetch(`${this._apiBaseUrl}/api/quotes`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    updates: [{ quoteId: bestQuote.id, filledAmount: coverageAmount.toString() }]
+                }),
+            });
         }
+        catch {
+            // Non-critical
+        }
+        return { txHash: tx.hash, policyId };
     }
     /**
      * Submit a new coverage quote to the orderbook.
@@ -561,7 +891,6 @@ class LayerCoverSDK {
      * const result = await sdk.submitQuote({
      *     poolId: 1,
      *     syndicateAddress: '0x...',
-     *     syndicateName: 'My Syndicate',
      *     coverageAmount: ethers.parseUnits('10000', 6), // 10,000 USDC
      *     premiumRateBps: 500, // 5% APY
      *     minDurationWeeks: 4,
@@ -575,7 +904,7 @@ class LayerCoverSDK {
         if (!this.signer) {
             throw new Error('Signer required to submit quotes');
         }
-        const { poolId, syndicateAddress, syndicateName = 'Unknown', coverageAmount, premiumRateBps, minDurationWeeks, maxDurationWeeks, allowPartialFill = false, minFillAmount, expiryHours = 24, whitelistedBuyer = ethers_1.ethers.ZeroAddress, intentMatcherAddress, } = params;
+        const { poolId, syndicateAddress, coverageAmount, premiumRateBps, minDurationWeeks, maxDurationWeeks, allowPartialFill = false, minFillAmount, expiryHours = 24, whitelistedBuyer = ethers_1.ethers.ZeroAddress, intentMatcherAddress, } = params;
         const signerAddress = await this.signer.getAddress();
         const network = await this.provider.getNetwork();
         const chainId = Number(network.chainId);
@@ -600,7 +929,8 @@ class LayerCoverSDK {
             reservationExpiry,
             nonce: nonce.toString(),
             whitelistedBuyer,
-            autoAllocate: true,
+            minPremiumBps: premiumRateBps, // Use premium rate as the floor
+            cancellationPenaltyBps: 0, // No early cancellation penalty by default
         };
         // Sign Reserve Intent
         const reserveDomain = {
@@ -620,6 +950,8 @@ class LayerCoverSDK {
             reservationExpiry: reserveIntent.reservationExpiry,
             nonce: BigInt(reserveIntent.nonce),
             whitelistedBuyer: reserveIntent.whitelistedBuyer || ethers_1.ethers.ZeroAddress,
+            minPremiumBps: reserveIntent.minPremiumBps,
+            cancellationPenaltyBps: reserveIntent.cancellationPenaltyBps,
         };
         const reserveSignature = await this.signer.signTypedData(reserveDomain, LayerCoverSDK.RESERVE_INTENT_TYPES, reserveValue);
         // Create Coverage Intent
@@ -628,12 +960,16 @@ class LayerCoverSDK {
             poolId,
             coverageAmount: coverageAmount.toString(),
             premiumRateBps,
+            minPremiumBps: 0,
             minDuration: minCoverageDuration,
             maxDuration: maxCoverageDuration,
             nonce: nonce.toString(),
             expiry: reservationExpiry,
             salt,
             requiresUpfront: true,
+            cancellationPenaltyBps: 0,
+            minFillAmount: (minFillAmount ?? (allowPartialFill ? 0n : coverageAmount)).toString(),
+            whitelistedBuyer: whitelistedBuyer || ethers_1.ethers.ZeroAddress,
         };
         // Resolve IntentMatcher address
         let intentMatcher = intentMatcherAddress;
@@ -661,6 +997,9 @@ class LayerCoverSDK {
             expiry: coverageIntent.expiry,
             salt: BigInt(coverageIntent.salt),
             requiresUpfront: coverageIntent.requiresUpfront,
+            cancellationPenaltyBps: coverageIntent.cancellationPenaltyBps,
+            minFillAmount: BigInt(coverageIntent.minFillAmount),
+            whitelistedBuyer: coverageIntent.whitelistedBuyer,
         };
         const intentSignature = await this.signer.signTypedData(intentDomain, LayerCoverSDK.COVERAGE_INTENT_TYPES, intentValue);
         // Submit to API
@@ -668,7 +1007,6 @@ class LayerCoverSDK {
             poolId,
             deployment: this._deployment,
             syndicateAddress,
-            syndicateName,
             coverageAmount: coverageAmount.toString(),
             premiumRateBps,
             minDurationWeeks,
@@ -769,7 +1107,10 @@ class LayerCoverSDK {
     // UTILITY METHODS
     // ========================================================================
     /**
-     * Get the payment token address for a pool (usually USDC)
+     * Get the payment token address for a pool (usually USDC).
+     *
+     * @param poolId The pool ID to query
+     * @returns ERC-20 token address used for premium payments in this pool
      */
     async getPaymentToken(poolId) {
         await this._ensureContracts();
@@ -814,9 +1155,19 @@ class LayerCoverSDK {
         };
     }
     /**
-     * Prepare an approval transaction for the payment token
+     * Prepare an ERC-20 approval transaction for the payment token.
+     * Call this before `purchase()` or `prepareBuyFromQuoteTx()` to ensure
+     * the contract can spend the buyer's premium.
+     *
      * @param poolId The ID of the pool to buy cover from
-     * @param amount The amount to approve (usually the premium)
+     * @param amount The amount to approve (usually the premium + buffer)
+     * @returns Populated transaction ready to send via `signer.sendTransaction()`
+     *
+     * @example
+     * ```ts
+     * const approveTx = await sdk.prepareApprovalTx(1, premium);
+     * await signer.sendTransaction(approveTx);
+     * ```
      */
     async prepareApprovalTx(poolId, amount) {
         const tokenAddress = await this.getPaymentToken(poolId);
@@ -916,12 +1267,319 @@ class LayerCoverSDK {
     // ========================================================================
     // STATIC HELPERS
     // ========================================================================
+    /**
+     * Calculate the net yield after deducting insurance cost.
+     * Useful for showing integrators the true yield on insured positions.
+     *
+     * @param baseApy The underlying protocol's APY (e.g., 5.2 for 5.2%)
+     * @param costBps Insurance premium rate in basis points (e.g., 500 = 5%)
+     * @returns Object with `baseApy`, `premiumRate` (as %), and `netApy`
+     *
+     * @example
+     * ```ts
+     * const yield = LayerCoverSDK.calculateNetYield(5.2, 300);
+     * // { baseApy: 5.2, premiumRate: 3, netApy: 2.2 }
+     * ```
+     */
     static calculateNetYield(baseApy, costBps) {
         return {
             baseApy,
-            premiumRate: costBps / 100,
+            premiumRate: costBps / 100, // bps to %
             netApy: baseApy - (costBps / 100)
         };
+    }
+    // ========================================================================
+    // QUOTE WATCHING
+    // ========================================================================
+    /**
+     * Watch quotes for a pool with automatic refresh and expiration filtering.
+     * Returns an unsubscribe function to stop watching.
+     *
+     * @param poolId Pool to watch quotes for
+     * @param callback Called with fresh quotes on each refresh cycle
+     * @param options Refresh interval and filtering options
+     * @returns Cleanup function to stop watching
+     *
+     * @example
+     * ```ts
+     * const stop = sdk.watchQuotes(1, (quotes) => {
+     *     console.log(`${quotes.length} active quotes`);
+     *     updateUI(quotes);
+     * }, { refreshIntervalMs: 15_000 });
+     *
+     * // Later: stop watching
+     * stop();
+     * ```
+     */
+    watchQuotes(poolId, callback, options = {}) {
+        const interval = options.refreshIntervalMs ?? 30000;
+        const filterExpired = options.filterExpired ?? true;
+        const filterInactive = options.filterInactive ?? true;
+        let stopped = false;
+        const refresh = async () => {
+            if (stopped)
+                return;
+            try {
+                let quotes = await this.getFixedRateQuotes(poolId);
+                if (filterExpired) {
+                    quotes = quotes.filter(q => !LayerCoverSDK.isQuoteExpired(q));
+                }
+                if (filterInactive) {
+                    quotes = quotes.filter(q => q.status === 'active');
+                }
+                // Sort by rate (cheapest first)
+                quotes = LayerCoverSDK.sortQuotesByRate(quotes);
+                if (!stopped) {
+                    callback(quotes);
+                }
+            }
+            catch (err) {
+                // Silently continue on network errors — the next cycle will retry
+                this._log.warn('[LayerCover SDK] Quote refresh failed:', err.message);
+            }
+        };
+        // Initial fetch immediately
+        refresh();
+        // Set up recurring refresh
+        const timer = setInterval(refresh, interval);
+        // Return cleanup function
+        return () => {
+            stopped = true;
+            clearInterval(timer);
+        };
+    }
+    // ========================================================================
+    // POLICY LIFECYCLE
+    // ========================================================================
+    /**
+     * Resolve the PolicyNFT contract (cached after first call).
+     * @internal
+     */
+    async _getPolicyNFT() {
+        if (!this._policyNFT) {
+            // Try pre-configured address first, fall back to on-chain lookup
+            let nftAddr = this._policyNFTAddress || '';
+            if (!nftAddr) {
+                nftAddr = await this.policyManager.policyNFT();
+            }
+            this._policyNFT = new ethers_1.Contract(nftAddr, [
+                // ERC721 enumeration
+                'function balanceOf(address owner) view returns (uint256)',
+                'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
+                'function ownerOf(uint256 tokenId) view returns (address)',
+                'function totalSupply() view returns (uint256)',
+                // Policy data
+                'function getPolicy(uint256 id) view returns (tuple(uint256 coverage, uint256 poolId, uint64 start, uint64 activation, uint64 claimableFrom, uint64 startBlock, bool voided, uint128 premiumDeposit, uint128 lastDrainTime, tuple(address underwriter, uint16 fixedRateBps, uint16 cancellationPenaltyBps, uint64 endTime, bytes32 reservationKey, uint256 reinsuredPortion) intent, tuple(address vault, uint256 sharesInsured, uint256 insuredValueUSDC, uint256 pricePerShareSnapshot) vaultCover))',
+            ], this.signer || this.provider);
+        }
+        return this._policyNFT;
+    }
+    /**
+     * Map raw on-chain policy struct to a clean UserPolicy object.
+     * @internal
+     */
+    _mapPolicy(policyId, owner, raw, active) {
+        const now = Math.floor(Date.now() / 1000);
+        const endTime = Number(raw.intent.endTime);
+        let status = 'active';
+        if (raw.voided)
+            status = 'voided';
+        else if (BigInt(raw.coverage) === 0n)
+            status = 'cancelled';
+        else if (!active || now > endTime)
+            status = 'expired';
+        const policy = {
+            policyId,
+            owner,
+            poolId: Number(raw.poolId),
+            coverage: raw.coverage.toString(),
+            startTimestamp: Number(raw.start),
+            activationTimestamp: Number(raw.activation),
+            claimableFrom: Number(raw.claimableFrom),
+            voided: raw.voided,
+            premiumDeposit: raw.premiumDeposit.toString(),
+            fixedRateBps: Number(raw.intent.fixedRateBps),
+            endTimestamp: endTime,
+            underwriter: raw.intent.underwriter,
+            cancellationPenaltyBps: Number(raw.intent.cancellationPenaltyBps),
+            isActive: active,
+            status,
+        };
+        // Include vault cover info if present
+        if (raw.vaultCover && raw.vaultCover.vault !== ethers_1.ethers.ZeroAddress) {
+            policy.vaultCover = {
+                vault: raw.vaultCover.vault,
+                sharesInsured: raw.vaultCover.sharesInsured.toString(),
+                insuredValueUSDC: raw.vaultCover.insuredValueUSDC.toString(),
+            };
+        }
+        return policy;
+    }
+    /**
+     * Get all policies owned by a wallet address.
+     *
+     * @param ownerAddress Wallet address to query
+     * @returns Array of UserPolicy objects (most recent first)
+     *
+     * @example
+     * ```ts
+     * const policies = await sdk.getMyPolicies('0xabc...');
+     * const active = policies.filter(p => p.isActive);
+     * ```
+     */
+    async getMyPolicies(ownerAddress) {
+        // Primary: use the API endpoint (same as the dashboard)
+        try {
+            const url = `${this._apiBaseUrl}/api/policies/user/${ownerAddress.toLowerCase()}`;
+            const response = await fetch(url);
+            if (response.ok) {
+                const data = await response.json();
+                if (data.policies && Array.isArray(data.policies)) {
+                    return data.policies.map((p) => ({
+                        policyId: Number(p.id),
+                        owner: p.holder || ownerAddress,
+                        poolId: Number(p.poolId || 0),
+                        coverage: p.coverage || '0',
+                        startTimestamp: Number(p.start || 0),
+                        activationTimestamp: Number(p.activation || 0),
+                        claimableFrom: Number(p.claimableFrom || 0),
+                        voided: false,
+                        premiumDeposit: p.premiumDeposit || '0',
+                        fixedRateBps: Number(p.intent?.fixedRateBps || 0),
+                        endTimestamp: Number(p.intent?.endTime || 0),
+                        underwriter: p.intent?.underwriter || ethers_1.ethers.ZeroAddress,
+                        cancellationPenaltyBps: 0,
+                        isActive: Boolean(p.isActive),
+                        status: p.isActive ? 'active' : 'expired',
+                    })).sort((a, b) => b.startTimestamp - a.startTimestamp);
+                }
+            }
+        }
+        catch (apiErr) {
+            this._log.warn('[LayerCover SDK] API policy fetch failed, trying on-chain:', apiErr.message);
+        }
+        // Fallback: on-chain via PolicyNFT
+        let nft;
+        try {
+            nft = await this._getPolicyNFT();
+        }
+        catch (err) {
+            this._log.warn('[LayerCover SDK] Could not resolve PolicyNFT contract — getMyPolicies unavailable:', err.message);
+            return [];
+        }
+        const balance = Number(await nft.balanceOf(ownerAddress));
+        if (balance === 0)
+            return [];
+        // Fetch all token IDs in parallel
+        const idPromises = Array.from({ length: balance }, (_, i) => nft.tokenOfOwnerByIndex(ownerAddress, i));
+        const tokenIds = await Promise.all(idPromises);
+        // Fetch policy data + active status in parallel
+        const policyPromises = tokenIds.map(async (id) => {
+            const policyId = Number(id);
+            const [raw, active] = await Promise.all([
+                nft.getPolicy(policyId),
+                this.policyManager.isPolicyActive(policyId),
+            ]);
+            return this._mapPolicy(policyId, ownerAddress, raw, active);
+        });
+        const policies = await Promise.all(policyPromises);
+        // Sort by most recent first
+        return policies.sort((a, b) => b.startTimestamp - a.startTimestamp);
+    }
+    /**
+     * Get detailed information about a specific policy.
+     *
+     * @param policyId On-chain policy NFT ID
+     * @returns UserPolicy with full details
+     *
+     * @example
+     * ```ts
+     * const policy = await sdk.getPolicyDetails(42);
+     * console.log(`Coverage: ${policy.coverage}, Active: ${policy.isActive}`);
+     * ```
+     */
+    async getPolicyDetails(policyId) {
+        const nft = await this._getPolicyNFT();
+        const [raw, owner, active] = await Promise.all([
+            nft.getPolicy(policyId),
+            nft.ownerOf(policyId),
+            this.policyManager.isPolicyActive(policyId),
+        ]);
+        return this._mapPolicy(policyId, owner, raw, active);
+    }
+    /**
+     * Check if a policy is currently active on-chain.
+     *
+     * @param policyId On-chain policy NFT ID
+     * @returns True if active and funded
+     */
+    async isPolicyActive(policyId) {
+        return this.policyManager.isPolicyActive(policyId);
+    }
+    /**
+     * Prepare a transaction to cancel an active policy and receive a refund.
+     * Only callable by the policy owner. May incur a cancellation penalty.
+     *
+     * @param policyId The policy to cancel
+     * @returns Unsigned transaction to send via signer
+     *
+     * @example
+     * ```ts
+     * const tx = await sdk.prepareCancelCoverTx(42);
+     * const receipt = await signer.sendTransaction(tx);
+     * await receipt.wait();
+     * ```
+     */
+    async prepareCancelCoverTx(policyId) {
+        const data = this.policyManager.interface.encodeFunctionData('cancelCover', [policyId]);
+        return {
+            to: await this.policyManager.getAddress(),
+            data,
+        };
+    }
+    /**
+     * Prepare a transaction to lapse an expired policy and claim remaining premium.
+     * Only callable by the policy owner after the policy has naturally expired.
+     *
+     * @param policyId The policy to lapse
+     * @returns Unsigned transaction to send via signer
+     *
+     * @example
+     * ```ts
+     * const tx = await sdk.prepareLapsePolicyTx(42);
+     * const receipt = await signer.sendTransaction(tx);
+     * await receipt.wait();
+     * ```
+     */
+    async prepareLapsePolicyTx(policyId) {
+        const data = this.policyManager.interface.encodeFunctionData('lapsePolicy', [policyId]);
+        return {
+            to: await this.policyManager.getAddress(),
+            data,
+        };
+    }
+    // ========================================================================
+    // ERROR TRANSLATION
+    // ========================================================================
+    /**
+     * Translate a contract error into a human-readable message.
+     * Handles contract reverts, user rejections, gas errors, and network issues.
+     *
+     * @param error Any error thrown during SDK or contract interaction
+     * @returns A clean, user-facing error string
+     *
+     * @example
+     * ```ts
+     * try {
+     *     await sdk.purchase(poolId, amount, weeks);
+     * } catch (err) {
+     *     const msg = LayerCoverSDK.getHumanError(err);
+     *     showToast(msg); // "Insufficient pool capacity. Try a smaller amount."
+     * }
+     * ```
+     */
+    static getHumanError(error) {
+        return (0, errors_1.getHumanError)(error);
     }
 }
 exports.LayerCoverSDK = LayerCoverSDK;
@@ -958,6 +1616,8 @@ LayerCoverSDK.RESERVE_INTENT_TYPES = {
         { name: 'reservationExpiry', type: 'uint64' },
         { name: 'nonce', type: 'uint96' },
         { name: 'whitelistedBuyer', type: 'address' },
+        { name: 'minPremiumBps', type: 'uint16' },
+        { name: 'cancellationPenaltyBps', type: 'uint16' },
     ],
 };
 /**
@@ -982,5 +1642,9 @@ LayerCoverSDK.COVERAGE_INTENT_TYPES = {
         { name: 'expiry', type: 'uint256' },
         { name: 'salt', type: 'uint256' },
         { name: 'requiresUpfront', type: 'bool' },
+        { name: 'cancellationPenaltyBps', type: 'uint16' },
+        { name: 'minFillAmount', type: 'uint256' },
+        { name: 'whitelistedBuyer', type: 'address' },
     ],
 };
+//# sourceMappingURL=index.js.map

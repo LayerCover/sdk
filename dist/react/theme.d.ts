@@ -95,3 +95,4 @@ export declare const presetThemes: {
     readonly carbon: BuyCoverTheme;
 };
 export type PresetThemeName = keyof typeof presetThemes;
+//# sourceMappingURL=theme.d.ts.map

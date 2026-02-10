@@ -1,0 +1,1223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LayerCover SDK Tester</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #06060b;
+            --surface: #0e0e18;
+            --surface-hover: #14142a;
+            --border: #1e1e3a;
+            --primary: #6366f1;
+            --primary-hover: #818cf8;
+            --primary-glow: rgba(99, 102, 241, 0.15);
+            --success: #10b981;
+            --success-bg: rgba(16, 185, 129, 0.08);
+            --error: #ef4444;
+            --error-bg: rgba(239, 68, 68, 0.08);
+            --warning: #f59e0b;
+            --warning-bg: rgba(245, 158, 11, 0.08);
+            --text: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-dim: #64748b;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --glass: rgba(14, 14, 24, 0.7);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* ─── Layout ─── */
+        .app {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            max-width: 1280px;
+            margin: 0 auto;
+            min-height: 100vh;
+            gap: 0;
+        }
+
+        .main { padding: 2rem; overflow-y: auto; }
+        .sidebar {
+            border-left: 1px solid var(--border);
+            padding: 2rem 1.5rem;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+            background: var(--surface);
+        }
+
+        /* ─── Header ─── */
+        .header { margin-bottom: 2rem; }
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary), #a855f7, #ec4899);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header p { color: var(--text-dim); font-size: 0.8rem; margin-top: 0.25rem; }
+
+        /* ─── Connection Bar ─── */
+        .connection-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 1.5rem;
+        }
+        .connection-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--error);
+        }
+        .connection-dot.connected { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .connection-text { flex: 1; font-size: 0.8rem; color: var(--text-secondary); }
+        .connection-text strong { color: var(--text); font-weight: 600; }
+
+        /* ─── Cards ─── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 1rem;
+            overflow: hidden;
+            transition: border-color 0.2s;
+        }
+        .card:hover { border-color: rgba(99, 102, 241, 0.3); }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.25rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .card-header:hover { background: var(--surface-hover); }
+
+        .card-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .card-title .icon {
+            width: 28px; height: 28px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            background: var(--primary-glow);
+        }
+
+        .card-badge {
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 0.15rem 0.5rem;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .badge-ready { background: var(--success-bg); color: var(--success); }
+        .badge-wallet { background: var(--warning-bg); color: var(--warning); }
+
+        .card-body {
+            padding: 0 1.25rem 1.25rem;
+            display: none;
+        }
+        .card.open .card-body { display: block; }
+
+        /* ─── Forms ─── */
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+        .form-row.single { grid-template-columns: 1fr; }
+
+        .form-group { margin-bottom: 0.75rem; }
+        .form-group label {
+            display: block;
+            font-size: 0.7rem;
+            font-weight: 500;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.35rem;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 0.6rem 0.85rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.85rem;
+            transition: border-color 0.2s;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+        input::placeholder { color: var(--text-dim); }
+
+        /* ─── Buttons ─── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-family: inherit;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            width: 100%;
+        }
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background: var(--primary-hover);
+            box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+        }
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover:not(:disabled) { background: #059669; }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+        .btn-outline:hover:not(:disabled) {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.75rem; }
+        .btn-row { display: flex; gap: 0.5rem; }
+
+        /* ─── Results ─── */
+        .result-panel {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 1rem;
+            margin-top: 0.75rem;
+            font-size: 0.8rem;
+        }
+        .result-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.4rem 0;
+            border-bottom: 1px solid rgba(30, 30, 58, 0.5);
+        }
+        .result-row:last-child { border-bottom: none; }
+        .result-label { color: var(--text-dim); }
+        .result-value { font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; }
+        .result-value.success { color: var(--success); }
+        .result-value.error { color: var(--error); }
+        .result-value.warning { color: var(--warning); }
+
+        /* ─── Quote Cards ─── */
+        .quote-item {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.85rem;
+            margin-top: 0.5rem;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .quote-item:hover { border-color: var(--primary); }
+        .quote-meta { font-size: 0.7rem; color: var(--text-dim); }
+        .quote-rate { font-size: 1.1rem; font-weight: 700; color: var(--success); }
+
+        /* ─── Sidebar ─── */
+        .sidebar h3 {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-dim);
+            margin-bottom: 0.75rem;
+        }
+
+        .log-container {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            max-height: calc(100vh - 120px);
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid rgba(30, 30, 58, 0.3);
+            font-size: 0.7rem;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            word-break: break-all;
+            line-height: 1.5;
+        }
+        .log-entry:last-child { border-bottom: none; }
+        .log-time { color: var(--text-dim); margin-right: 0.5rem; }
+        .log-success { color: var(--success); }
+        .log-error { color: var(--error); }
+        .log-warning { color: var(--warning); }
+        .log-info { color: var(--text-secondary); }
+
+        /* ─── Status Message ─── */
+        .status-msg {
+            padding: 0.6rem 0.85rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            margin-top: 0.75rem;
+            display: none;
+        }
+        .status-msg.show { display: block; }
+        .status-msg.success { background: var(--success-bg); border: 1px solid rgba(16, 185, 129, 0.2); color: var(--success); }
+        .status-msg.error { background: var(--error-bg); border: 1px solid rgba(239, 68, 68, 0.2); color: var(--error); }
+
+        /* ─── Expandable JSON ─── */
+        .json-preview {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem;
+            margin-top: 0.5rem;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* ─── Spinner ─── */
+        .spinner {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid rgba(255,255,255,0.2);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ─── Responsive ─── */
+        @media (max-width: 900px) {
+            .app { grid-template-columns: 1fr; }
+            .sidebar { height: auto; position: static; border-left: none; border-top: 1px solid var(--border); }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <div class="main">
+            <div class="header">
+                <h1>🛡️ LayerCover SDK Tester</h1>
+                <p>Interactive test harness for @layercover/sdk v0.4.0</p>
+            </div>
+
+            <!-- Connection Bar -->
+            <div class="connection-bar">
+                <div class="connection-dot" id="connDot"></div>
+                <div class="connection-text" id="connText">No wallet connected</div>
+                <button class="btn btn-primary btn-sm" id="connectBtn" onclick="connectWallet()">Connect</button>
+            </div>
+
+            <!-- 1. Config Fetch -->
+            <div class="card open" id="configCard">
+                <div class="card-header" onclick="toggleCard('configCard')">
+                    <div class="card-title">
+                        <div class="icon">⚙️</div>
+                        Config & Contract Discovery
+                    </div>
+                    <span class="card-badge badge-ready">Ready</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>API Base URL</label>
+                            <input type="text" id="apiBaseUrl" value="http://localhost:3000" placeholder="https://app.layercover.com">
+                        </div>
+                        <div class="form-group">
+                            <label>Deployment</label>
+                            <input type="text" id="deployment" value="base_sepolia_usdc" placeholder="base_sepolia_usdc">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="fetchConfig()">🔍 Fetch Config</button>
+                    <div id="configResult"></div>
+                </div>
+            </div>
+
+            <!-- 2. Pool Discovery & Quotes -->
+            <div class="card" id="quotesCard">
+                <div class="card-header" onclick="toggleCard('quotesCard')">
+                    <div class="card-title">
+                        <div class="icon">📊</div>
+                        Pool Quotes & Discovery
+                    </div>
+                    <span class="card-badge badge-ready">Ready</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Pool ID</label>
+                            <input type="number" id="quotePoolId" value="1" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Deployment</label>
+                            <input type="text" id="quoteDeployment" value="base_sepolia_usdc">
+                        </div>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn btn-primary" onclick="fetchQuotes()">📥 Fetch Quotes</button>
+                        <button class="btn btn-outline" onclick="fetchPoolMeta()">🏷️ Pool Metadata</button>
+                    </div>
+                    <div id="quotesResult"></div>
+                </div>
+            </div>
+
+            <!-- 3. Premium Calculator -->
+            <div class="card" id="premiumCard">
+                <div class="card-header" onclick="toggleCard('premiumCard')">
+                    <div class="card-title">
+                        <div class="icon">🧮</div>
+                        Premium Calculator
+                    </div>
+                    <span class="card-badge badge-ready">Ready</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Coverage (USDC)</label>
+                            <input type="number" id="calcAmount" value="1000" min="1" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Rate (bps)</label>
+                            <input type="number" id="calcRate" value="500" min="1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Duration (weeks)</label>
+                            <input type="number" id="calcDuration" value="12" min="1" max="52">
+                        </div>
+                        <div class="form-group">
+                            <label>Base APY (%)</label>
+                            <input type="number" id="calcBaseApy" value="8" min="0" step="0.1">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="calculatePremium()">🧮 Calculate</button>
+                    <div id="premiumResult"></div>
+                </div>
+            </div>
+
+            <!-- 4. Quote Submission (Syndicate) -->
+            <div class="card" id="submitCard">
+                <div class="card-header" onclick="toggleCard('submitCard')">
+                    <div class="card-title">
+                        <div class="icon">📤</div>
+                        Submit Quote (Underwriter)
+                    </div>
+                    <span class="card-badge badge-wallet">Wallet Req.</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Pool ID</label>
+                            <input type="number" id="submitPoolId" value="1" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Syndicate Address</label>
+                            <input type="text" id="submitSyndicateAddr" placeholder="0x...">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Coverage (USDC)</label>
+                            <input type="number" id="submitCoverage" value="1000" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Rate (bps)</label>
+                            <input type="number" id="submitRate" value="500" min="1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Min Duration (weeks)</label>
+                            <input type="number" id="submitMinWeeks" value="4" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Duration (weeks)</label>
+                            <input type="number" id="submitMaxWeeks" value="12" min="1">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" id="submitQuoteBtn" onclick="submitQuote()" disabled>📝 Sign & Submit Quote</button>
+                    <div id="submitResult"></div>
+                </div>
+            </div>
+
+            <!-- 5. Syndicate Exposure -->
+            <div class="card" id="exposureCard">
+                <div class="card-header" onclick="toggleCard('exposureCard')">
+                    <div class="card-title">
+                        <div class="icon">📈</div>
+                        Syndicate Exposure
+                    </div>
+                    <span class="card-badge badge-ready">Ready</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-row single">
+                        <div class="form-group">
+                            <label>Syndicate Address</label>
+                            <input type="text" id="exposureSyndicateAddr" placeholder="0x...">
+                        </div>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn btn-primary" onclick="fetchExposure()">📊 Get Exposure</button>
+                        <button class="btn btn-outline" onclick="fetchSyndicateQuotes()">📋 List Quotes</button>
+                    </div>
+                    <div id="exposureResult"></div>
+                </div>
+            </div>
+
+            <!-- 6. Purchase Flow -->
+            <div class="card" id="purchaseCard">
+                <div class="card-header" onclick="toggleCard('purchaseCard')">
+                    <div class="card-title">
+                        <div class="icon">🛒</div>
+                        Purchase Coverage
+                    </div>
+                    <span class="card-badge badge-wallet">Wallet Req.</span>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Pool ID</label>
+                            <input type="number" id="purchasePoolId" value="1" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Coverage (USDC)</label>
+                            <input type="number" id="purchaseAmount" value="100" min="1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Duration (weeks)</label>
+                            <input type="number" id="purchaseDuration" value="12" min="1" max="52">
+                        </div>
+                        <div class="form-group">
+                            <label>Referral Code (optional)</label>
+                            <input type="text" id="purchaseReferral" placeholder="0x0000...">
+                        </div>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn btn-outline" id="prepareTxBtn" onclick="preparePurchaseTx()" disabled>🔧 Prepare Tx</button>
+                        <button class="btn btn-success" id="executePurchaseBtn" onclick="executePurchase()" disabled>🔐 Execute Purchase</button>
+                    </div>
+                    <div id="purchaseResult"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar: Activity Log -->
+        <div class="sidebar">
+            <h3>📋 Activity Log</h3>
+            <div class="log-container" id="logContainer">
+                <div class="log-entry log-info">
+                    <span class="log-time">[--:--:--]</span>
+                    SDK Tester initialized. Connect wallet or fetch config to begin.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ethers.js v6 via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+
+    <script>
+        // ═══════════════════════════════════════════════════════════════════
+        // STATE
+        // ═══════════════════════════════════════════════════════════════════
+        let provider = null;
+        let signer = null;
+        let walletAddress = null;
+        let configData = null;
+        let fetchedQuotes = [];
+
+        // ═══════════════════════════════════════════════════════════════════
+        // LOGGING
+        // ═══════════════════════════════════════════════════════════════════
+        function log(msg, type = 'info') {
+            const el = document.getElementById('logContainer');
+            const t = new Date().toLocaleTimeString();
+            const cls = `log-${type}`;
+            el.innerHTML = `<div class="log-entry ${cls}"><span class="log-time">[${t}]</span> ${msg}</div>` + el.innerHTML;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // UI HELPERS
+        // ═══════════════════════════════════════════════════════════════════
+        function toggleCard(id) {
+            document.getElementById(id).classList.toggle('open');
+        }
+
+        function resultPanel(rows) {
+            return `<div class="result-panel">${rows.map(([l, v, cls]) =>
+                `<div class="result-row"><span class="result-label">${l}</span><span class="result-value ${cls || ''}">${v}</span></div>`
+            ).join('')}</div>`;
+        }
+
+        function jsonPanel(obj) {
+            return `<div class="json-preview">${JSON.stringify(obj, (k, v) => typeof v === 'bigint' ? v.toString() : v, 2)}</div>`;
+        }
+
+        function getApiBase() {
+            return document.getElementById('apiBaseUrl').value.replace(/\/$/, '');
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 0. WALLET CONNECTION
+        // ═══════════════════════════════════════════════════════════════════
+        async function connectWallet() {
+            if (!window.ethereum) {
+                log('MetaMask not detected. Install MetaMask to use wallet features.', 'error');
+                alert('MetaMask is required for wallet-connected features.');
+                return;
+            }
+
+            try {
+                log('Requesting wallet connection...');
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                walletAddress = accounts[0];
+
+                provider = new ethers.BrowserProvider(window.ethereum);
+                signer = await provider.getSigner();
+
+                const network = await provider.getNetwork();
+                const short = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
+
+                document.getElementById('connDot').classList.add('connected');
+                document.getElementById('connText').innerHTML = `<strong>${short}</strong> · Chain ${network.chainId}`;
+                document.getElementById('connectBtn').textContent = 'Connected';
+                document.getElementById('connectBtn').disabled = true;
+
+                // Enable wallet-required buttons
+                document.getElementById('submitQuoteBtn').disabled = false;
+                document.getElementById('prepareTxBtn').disabled = false;
+                document.getElementById('executePurchaseBtn').disabled = false;
+
+                log(`Connected: ${short} on chain ${network.chainId}`, 'success');
+
+                if (Number(network.chainId) !== 84532) {
+                    log('⚠️ Not on Base Sepolia (84532). Some features may not work.', 'warning');
+                }
+            } catch (err) {
+                log(`Connection failed: ${err.message}`, 'error');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 1. CONFIG FETCH
+        // ═══════════════════════════════════════════════════════════════════
+        async function fetchConfig() {
+            const base = getApiBase();
+            const deployment = document.getElementById('deployment').value;
+            log(`Fetching config from ${base}/api/config?deployment=${deployment}...`);
+
+            try {
+                const res = await fetch(`${base}/api/config?deployment=${encodeURIComponent(deployment)}`);
+                const data = await res.json();
+
+                if (!data.success) throw new Error(data.error || 'Config fetch failed');
+
+                configData = data;
+                const c = data.contracts;
+
+                document.getElementById('configResult').innerHTML = resultPanel([
+                    ['Deployment', data.deployment, 'success'],
+                    ['Chain ID', data.chainId],
+                    ['PolicyManager', shortAddr(c.policyManager)],
+                    ['IntentOrderBook', shortAddr(c.intentOrderBook)],
+                    ['IntentMatcher', shortAddr(c.intentMatcher)],
+                    ['CapitalPool', shortAddr(c.capitalPool || '—')],
+                    ['PoolRegistry', shortAddr(c.poolRegistry || '—')],
+                    ['On-Chain Verified', data.onChainVerified ? '✅' : '❌'],
+                ]) + jsonPanel(data.contracts);
+
+                log(`Config loaded: ${Object.keys(c).filter(k => c[k]).length} contract addresses`, 'success');
+            } catch (err) {
+                document.getElementById('configResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Config fetch failed: ${err.message}`, 'error');
+            }
+        }
+
+        function shortAddr(addr) {
+            if (!addr || addr === '—') return '—';
+            return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 2. POOL QUOTES
+        // ═══════════════════════════════════════════════════════════════════
+        async function fetchQuotes() {
+            const base = getApiBase();
+            const poolId = document.getElementById('quotePoolId').value;
+            const deployment = document.getElementById('quoteDeployment').value;
+            log(`Fetching quotes for pool ${poolId}...`);
+
+            try {
+                const res = await fetch(`${base}/api/quotes?poolId=${poolId}&deployment=${encodeURIComponent(deployment)}`);
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+                const quotes = data.quotes || [];
+                fetchedQuotes = quotes;
+
+                if (quotes.length === 0) {
+                    document.getElementById('quotesResult').innerHTML =
+                        `<div class="status-msg warning show">No quotes available for Pool ${poolId}</div>`;
+                    log(`No quotes found for pool ${poolId}`, 'warning');
+                    return;
+                }
+
+                let html = `<div class="status-msg success show">Found ${quotes.length} quote(s)</div>`;
+                quotes.forEach((q, i) => {
+                    const rate = (q.premiumRateBps / 100).toFixed(2);
+                    const amt = q.coverageAmount ? formatUsdc(q.coverageAmount) : '?';
+                    html += `<div class="quote-item">
+                        <div>
+                            <strong>${q.syndicateName || 'Unknown'}</strong>
+                            <div class="quote-meta">${shortAddr(q.syndicateAddress)} · ${q.minDurationWeeks}-${q.maxDurationWeeks}w · Order #${q.orderId || '—'}</div>
+                        </div>
+                        <div class="quote-rate">${rate}%</div>
+                    </div>`;
+                });
+
+                document.getElementById('quotesResult').innerHTML = html;
+                log(`${quotes.length} quote(s) for pool ${poolId}. Best: ${(quotes[0].premiumRateBps / 100).toFixed(2)}%`, 'success');
+            } catch (err) {
+                document.getElementById('quotesResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Quote fetch failed: ${err.message}`, 'error');
+            }
+        }
+
+        async function fetchPoolMeta() {
+            const base = getApiBase();
+            const poolId = document.getElementById('quotePoolId').value;
+            log(`Fetching pool ${poolId} metadata...`);
+
+            try {
+                const res = await fetch(`${base}/api/pools?poolId=${poolId}`);
+                const data = await res.json();
+
+                document.getElementById('quotesResult').innerHTML = jsonPanel(data);
+                log(`Pool ${poolId} metadata loaded`, 'success');
+            } catch (err) {
+                document.getElementById('quotesResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Pool metadata failed: ${err.message}`, 'error');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 3. PREMIUM CALCULATOR
+        // ═══════════════════════════════════════════════════════════════════
+        function calculatePremium() {
+            const amountUsdc = parseFloat(document.getElementById('calcAmount').value);
+            const rateBps = parseInt(document.getElementById('calcRate').value);
+            const weeks = parseInt(document.getElementById('calcDuration').value);
+            const baseApy = parseFloat(document.getElementById('calcBaseApy').value);
+
+            const DECIMALS = 6;
+            const coverAmount = BigInt(Math.floor(amountUsdc * 10 ** DECIMALS));
+            const durationSeconds = weeks * 7 * 24 * 60 * 60;
+            const BPS_DENOMINATOR = 10000n;
+            const SECONDS_PER_YEAR = 365n * 24n * 60n * 60n;
+
+            // SDK formula: (coverageAmount * rateBps * durationSeconds) / (BPS_DENOMINATOR * SECONDS_PER_YEAR)
+            const premium = (coverAmount * BigInt(rateBps) * BigInt(durationSeconds)) /
+                            (BPS_DENOMINATOR * SECONDS_PER_YEAR);
+
+            const premiumFloat = Number(premium) / 10 ** DECIMALS;
+            const effectiveCost = (premiumFloat / amountUsdc * 100).toFixed(4);
+            const netApy = baseApy - (rateBps / 100);
+
+            document.getElementById('premiumResult').innerHTML = resultPanel([
+                ['Coverage', `${amountUsdc.toLocaleString()} USDC`],
+                ['Rate', `${(rateBps / 100).toFixed(2)}% APR`],
+                ['Duration', `${weeks} weeks`],
+                ['Premium', `${premiumFloat.toFixed(4)} USDC`, 'success'],
+                ['Effective Cost', `${effectiveCost}%`],
+                ['Base APY', `${baseApy.toFixed(2)}%`],
+                ['Insured APY', `${netApy.toFixed(2)}%`, netApy > 0 ? 'success' : 'error'],
+            ]);
+
+            log(`Premium: ${premiumFloat.toFixed(4)} USDC for ${amountUsdc} USDC × ${rateBps}bps × ${weeks}w`, 'success');
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 4. QUOTE SUBMISSION (SYNDICATE)
+        // ═══════════════════════════════════════════════════════════════════
+        async function submitQuote() {
+            if (!signer) { log('Connect wallet first', 'error'); return; }
+
+            const base = getApiBase();
+            const poolId = parseInt(document.getElementById('submitPoolId').value);
+            const syndicateAddress = document.getElementById('submitSyndicateAddr').value;
+            const coverageUsdc = parseFloat(document.getElementById('submitCoverage').value);
+            const premiumRateBps = parseInt(document.getElementById('submitRate').value);
+            const minWeeks = parseInt(document.getElementById('submitMinWeeks').value);
+            const maxWeeks = parseInt(document.getElementById('submitMaxWeeks').value);
+
+            if (!syndicateAddress) { log('Syndicate address required', 'error'); return; }
+
+            log('Preparing quote signatures...');
+
+            try {
+                const DECIMALS = 6;
+                const coverageAmount = BigInt(Math.floor(coverageUsdc * 10 ** DECIMALS));
+                const minCoverageDuration = minWeeks * 7 * 24 * 60 * 60;
+                const maxCoverageDuration = maxWeeks * 7 * 24 * 60 * 60;
+                const reservationExpiry = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+                const nonce = Date.now();
+                const salt = ethers.hexlify(ethers.randomBytes(32));
+                const network = await provider.getNetwork();
+                const chainId = Number(network.chainId);
+
+                // ReserveIntent
+                const reserveIntent = {
+                    solver: walletAddress,
+                    underwriter: syndicateAddress,
+                    poolId,
+                    minCoverageDuration,
+                    maxCoverageDuration,
+                    coverageAmount: coverageAmount.toString(),
+                    minFillAmount: coverageAmount.toString(),
+                    allowPartialFill: false,
+                    reservationExpiry,
+                    nonce: nonce.toString(),
+                    whitelistedBuyer: ethers.ZeroAddress,
+                    minPremiumBps: premiumRateBps,
+                    cancellationPenaltyBps: 0,
+                };
+
+                const reserveDomain = { name: 'Syndicate', version: '1', chainId, verifyingContract: syndicateAddress };
+                const reserveTypes = {
+                    ReserveIntent: [
+                        { name: 'solver', type: 'address' },
+                        { name: 'underwriter', type: 'address' },
+                        { name: 'poolId', type: 'uint256' },
+                        { name: 'minCoverageDuration', type: 'uint32' },
+                        { name: 'maxCoverageDuration', type: 'uint32' },
+                        { name: 'coverageAmount', type: 'uint256' },
+                        { name: 'minFillAmount', type: 'uint256' },
+                        { name: 'allowPartialFill', type: 'bool' },
+                        { name: 'reservationExpiry', type: 'uint64' },
+                        { name: 'nonce', type: 'uint96' },
+                        { name: 'whitelistedBuyer', type: 'address' },
+                        { name: 'minPremiumBps', type: 'uint16' },
+                        { name: 'cancellationPenaltyBps', type: 'uint16' },
+                    ],
+                };
+
+                const reserveValue = {
+                    solver: reserveIntent.solver,
+                    underwriter: reserveIntent.underwriter,
+                    poolId: reserveIntent.poolId,
+                    minCoverageDuration: reserveIntent.minCoverageDuration,
+                    maxCoverageDuration: reserveIntent.maxCoverageDuration,
+                    coverageAmount: BigInt(reserveIntent.coverageAmount),
+                    minFillAmount: BigInt(reserveIntent.minFillAmount),
+                    allowPartialFill: reserveIntent.allowPartialFill,
+                    reservationExpiry: reserveIntent.reservationExpiry,
+                    nonce: BigInt(reserveIntent.nonce),
+                    whitelistedBuyer: reserveIntent.whitelistedBuyer,
+                    minPremiumBps: reserveIntent.minPremiumBps,
+                    cancellationPenaltyBps: reserveIntent.cancellationPenaltyBps,
+                };
+
+                log('Requesting ReserveIntent signature...');
+                const reserveSignature = await signer.signTypedData(reserveDomain, reserveTypes, reserveValue);
+                log('ReserveIntent signed ✓', 'success');
+
+                // CoverageIntent
+                const coverageIntent = {
+                    maker: syndicateAddress,
+                    poolId,
+                    coverageAmount: coverageAmount.toString(),
+                    premiumRateBps,
+                    minDuration: minCoverageDuration,
+                    maxDuration: maxCoverageDuration,
+                    nonce: nonce.toString(),
+                    expiry: reservationExpiry,
+                    salt,
+                    requiresUpfront: true,
+                    cancellationPenaltyBps: 0,
+                    minFillAmount: coverageAmount.toString(),
+                    whitelistedBuyer: ethers.ZeroAddress,
+                };
+
+                // Resolve IntentMatcher address
+                let intentMatcher = configData?.contracts?.intentMatcher;
+                if (!intentMatcher) {
+                    log('No IntentMatcher address in config, using fallback', 'warning');
+                    intentMatcher = configData?.contracts?.intentOrderBook || ethers.ZeroAddress;
+                }
+
+                const intentDomain = { name: 'IntentMatcher', version: '1', chainId, verifyingContract: intentMatcher };
+                const intentTypes = {
+                    CoverageIntent: [
+                        { name: 'maker', type: 'address' },
+                        { name: 'poolId', type: 'uint256' },
+                        { name: 'coverageAmount', type: 'uint256' },
+                        { name: 'premiumRateBps', type: 'uint256' },
+                        { name: 'minDuration', type: 'uint256' },
+                        { name: 'maxDuration', type: 'uint256' },
+                        { name: 'nonce', type: 'uint256' },
+                        { name: 'expiry', type: 'uint256' },
+                        { name: 'salt', type: 'uint256' },
+                        { name: 'requiresUpfront', type: 'bool' },
+                        { name: 'cancellationPenaltyBps', type: 'uint16' },
+                        { name: 'minFillAmount', type: 'uint256' },
+                        { name: 'whitelistedBuyer', type: 'address' },
+                    ],
+                };
+
+                const intentValue = {
+                    maker: coverageIntent.maker,
+                    poolId: coverageIntent.poolId,
+                    coverageAmount: BigInt(coverageIntent.coverageAmount),
+                    premiumRateBps: coverageIntent.premiumRateBps,
+                    minDuration: coverageIntent.minDuration,
+                    maxDuration: coverageIntent.maxDuration,
+                    nonce: BigInt(coverageIntent.nonce),
+                    expiry: coverageIntent.expiry,
+                    salt: BigInt(coverageIntent.salt),
+                    requiresUpfront: coverageIntent.requiresUpfront,
+                    cancellationPenaltyBps: coverageIntent.cancellationPenaltyBps,
+                    minFillAmount: BigInt(coverageIntent.minFillAmount),
+                    whitelistedBuyer: coverageIntent.whitelistedBuyer,
+                };
+
+                log('Requesting CoverageIntent signature...');
+                const intentSignature = await signer.signTypedData(intentDomain, intentTypes, intentValue);
+                log('CoverageIntent signed ✓', 'success');
+
+                // Submit to API
+                log('Submitting quote to API...');
+                const quoteData = {
+                    poolId,
+                    deployment: document.getElementById('deployment').value,
+                    syndicateAddress,
+                    syndicateName: 'SDK Tester',
+                    coverageAmount: coverageAmount.toString(),
+                    premiumRateBps,
+                    minDurationWeeks: minWeeks,
+                    maxDurationWeeks: maxWeeks,
+                    reserveIntent,
+                    signature: reserveSignature,
+                    coverageIntent,
+                    intentSignature,
+                    createdAt: new Date().toISOString(),
+                };
+
+                const res = await fetch(`${base}/api/quotes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(quoteData),
+                });
+
+                const result = await res.json();
+
+                if (result.success || result.quote) {
+                    document.getElementById('submitResult').innerHTML = resultPanel([
+                        ['Status', '✅ Submitted', 'success'],
+                        ['Quote ID', result.quote?.id || '—'],
+                        ['Pool', poolId],
+                        ['Rate', `${(premiumRateBps / 100).toFixed(2)}%`],
+                    ]) + jsonPanel(result);
+                    log(`Quote submitted: ${result.quote?.id}`, 'success');
+                } else {
+                    throw new Error(result.error || 'Submission failed');
+                }
+            } catch (err) {
+                document.getElementById('submitResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Quote submission failed: ${err.message}`, 'error');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 5. SYNDICATE EXPOSURE
+        // ═══════════════════════════════════════════════════════════════════
+        async function fetchExposure() {
+            const base = getApiBase();
+            const addr = document.getElementById('exposureSyndicateAddr').value;
+            if (!addr) { log('Enter a syndicate address', 'error'); return; }
+
+            log(`Fetching exposure for ${shortAddr(addr)}...`);
+            try {
+                const res = await fetch(`${base}/api/quotes/exposure?syndicateAddress=${encodeURIComponent(addr)}`);
+                const data = await res.json();
+
+                document.getElementById('exposureResult').innerHTML = resultPanel([
+                    ['Total Exposure', formatUsdc(data.totalExposure || '0') + ' USDC', 'warning'],
+                    ['Active Quotes', data.activeQuoteCount || 0],
+                ]);
+                log(`Exposure: ${formatUsdc(data.totalExposure || '0')} USDC`, 'success');
+            } catch (err) {
+                document.getElementById('exposureResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Exposure fetch failed: ${err.message}`, 'error');
+            }
+        }
+
+        async function fetchSyndicateQuotes() {
+            const base = getApiBase();
+            const addr = document.getElementById('exposureSyndicateAddr').value;
+            if (!addr) { log('Enter a syndicate address', 'error'); return; }
+
+            log(`Fetching quotes for ${shortAddr(addr)}...`);
+            try {
+                const res = await fetch(`${base}/api/quotes?syndicateAddress=${encodeURIComponent(addr)}`);
+                const data = await res.json();
+                const quotes = data.quotes || [];
+
+                let html = `<div class="status-msg ${quotes.length ? 'success' : 'warning'} show">${quotes.length} quote(s) found</div>`;
+                quotes.forEach(q => {
+                    html += `<div class="quote-item">
+                        <div>
+                            <strong>Pool ${q.poolId}</strong>
+                            <div class="quote-meta">${formatUsdc(q.coverageAmount || '0')} USDC · ${q.status || 'active'}</div>
+                        </div>
+                        <div class="quote-rate">${(q.premiumRateBps / 100).toFixed(2)}%</div>
+                    </div>`;
+                });
+
+                document.getElementById('exposureResult').innerHTML = html;
+                log(`${quotes.length} syndicate quotes loaded`, 'success');
+            } catch (err) {
+                document.getElementById('exposureResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Syndicate quotes failed: ${err.message}`, 'error');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 6. PURCHASE FLOW
+        // ═══════════════════════════════════════════════════════════════════
+        async function preparePurchaseTx() {
+            if (!signer) { log('Connect wallet first', 'error'); return; }
+
+            const base = getApiBase();
+            const poolId = parseInt(document.getElementById('purchasePoolId').value);
+            const amountUsdc = parseFloat(document.getElementById('purchaseAmount').value);
+            const weeks = parseInt(document.getElementById('purchaseDuration').value);
+            const deployment = document.getElementById('deployment').value;
+
+            log(`Preparing purchase tx: Pool ${poolId}, ${amountUsdc} USDC, ${weeks}w...`);
+
+            try {
+                // First fetch a quote
+                const quotesRes = await fetch(`${base}/api/quotes?poolId=${poolId}&deployment=${encodeURIComponent(deployment)}`);
+                const quotesData = await quotesRes.json();
+                const quotes = quotesData.quotes || [];
+
+                if (quotes.length === 0) throw new Error('No quotes available for this pool');
+
+                const bestQuote = quotes[0];
+                const quoteId = bestQuote.id;
+                const coverageAmount = BigInt(Math.floor(amountUsdc * 10 ** 6));
+
+                // Prepare via API
+                const prepRes = await fetch(`${base}/api/purchase/prepare`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        quoteId,
+                        amount: coverageAmount.toString(),
+                        durationWeeks: weeks,
+                        buyerAddress: walletAddress,
+                    }),
+                });
+
+                const prepData = await prepRes.json();
+
+                if (!prepData.success && !prepData.transactions) {
+                    throw new Error(prepData.error || 'Prepare failed');
+                }
+
+                document.getElementById('purchaseResult').innerHTML = resultPanel([
+                    ['Status', '✅ Tx Prepared', 'success'],
+                    ['Quote', `${(bestQuote.premiumRateBps / 100).toFixed(2)}% from ${bestQuote.syndicateName || '?'}`],
+                    ['Approval To', shortAddr(prepData.transactions?.approval?.to)],
+                    ['Purchase To', shortAddr(prepData.transactions?.postBuyOrder?.to || prepData.transactions?.fillBuyOrder?.to)],
+                ]) + jsonPanel(prepData);
+
+                log('Tx prepared. Ready to execute.', 'success');
+            } catch (err) {
+                document.getElementById('purchaseResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Prepare failed: ${err.message}`, 'error');
+            }
+        }
+
+        async function executePurchase() {
+            if (!signer) { log('Connect wallet first', 'error'); return; }
+
+            const base = getApiBase();
+            const poolId = parseInt(document.getElementById('purchasePoolId').value);
+            const amountUsdc = parseFloat(document.getElementById('purchaseAmount').value);
+            const weeks = parseInt(document.getElementById('purchaseDuration').value);
+            const deployment = document.getElementById('deployment').value;
+
+            log('Starting full purchase flow...');
+
+            try {
+                // 1. Fetch quotes
+                log('Step 1: Fetching quotes...');
+                const quotesRes = await fetch(`${base}/api/quotes?poolId=${poolId}&deployment=${encodeURIComponent(deployment)}`);
+                const quotesData = await quotesRes.json();
+                const quotes = quotesData.quotes || [];
+                if (quotes.length === 0) throw new Error('No quotes available');
+
+                const bestQuote = quotes[0];
+                log(`Using quote: ${(bestQuote.premiumRateBps / 100).toFixed(2)}% from ${bestQuote.syndicateName}`, 'success');
+
+                // 2. Prepare
+                log('Step 2: Preparing transaction...');
+                const coverageAmount = BigInt(Math.floor(amountUsdc * 10 ** 6));
+                const prepRes = await fetch(`${base}/api/purchase/prepare`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        quoteId: bestQuote.id,
+                        amount: coverageAmount.toString(),
+                        durationWeeks: weeks,
+                        buyerAddress: walletAddress,
+                    }),
+                });
+                const prepData = await prepRes.json();
+                if (!prepData.success && !prepData.transactions) throw new Error(prepData.error || 'Prepare failed');
+                log('Transaction prepared ✓', 'success');
+
+                // 3. Approve
+                if (prepData.transactions?.approval) {
+                    log('Step 3: Sending approval tx...');
+                    const approvalTx = prepData.transactions.approval;
+                    const approvalHash = await window.ethereum.request({
+                        method: 'eth_sendTransaction',
+                        params: [{ from: walletAddress, to: approvalTx.to, data: approvalTx.data }],
+                    });
+                    log(`Approval sent: ${approvalHash.slice(0, 14)}...`, 'success');
+                    log('Waiting for confirmation...');
+                    await new Promise(r => setTimeout(r, 4000));
+                }
+
+                // 4. Purchase
+                const purchaseTx = prepData.transactions?.postBuyOrder || prepData.transactions?.fillBuyOrder;
+                if (purchaseTx) {
+                    log('Step 4: Sending purchase tx...');
+                    const purchaseHash = await window.ethereum.request({
+                        method: 'eth_sendTransaction',
+                        params: [{ from: walletAddress, to: purchaseTx.to, data: purchaseTx.data }],
+                    });
+                    log(`Purchase sent: ${purchaseHash.slice(0, 14)}...`, 'success');
+                    log('Waiting for confirmation...');
+                    await new Promise(r => setTimeout(r, 5000));
+
+                    // 5. Confirm
+                    log('Step 5: Confirming purchase...');
+                    const confirmRes = await fetch(`${base}/api/purchase/confirm`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            quoteId: bestQuote.id,
+                            txHash: purchaseHash,
+                            filledAmount: coverageAmount.toString(),
+                        }),
+                    });
+                    const confirmData = await confirmRes.json();
+
+                    document.getElementById('purchaseResult').innerHTML = resultPanel([
+                        ['Status', '🎉 Purchase Complete', 'success'],
+                        ['Tx Hash', shortAddr(purchaseHash)],
+                        ['Policy ID', confirmData.policyId || '—'],
+                    ]);
+                    log('🎉 Purchase complete!', 'success');
+                } else {
+                    throw new Error('No purchase transaction returned');
+                }
+            } catch (err) {
+                document.getElementById('purchaseResult').innerHTML =
+                    `<div class="status-msg error show">❌ ${err.message}</div>`;
+                log(`Purchase failed: ${err.message}`, 'error');
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // UTILS
+        // ═══════════════════════════════════════════════════════════════════
+        function formatUsdc(val) {
+            try {
+                const n = Number(BigInt(val)) / 1e6;
+                return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+            } catch { return val; }
+        }
+
+        // Listen for account changes
+        if (window.ethereum) {
+            window.ethereum.on('accountsChanged', accs => {
+                if (accs.length === 0) {
+                    walletAddress = null;
+                    document.getElementById('connDot').classList.remove('connected');
+                    document.getElementById('connText').textContent = 'Disconnected';
+                    log('Wallet disconnected', 'warning');
+                } else {
+                    walletAddress = accs[0];
+                    log(`Account switched: ${shortAddr(walletAddress)}`, 'info');
+                }
+            });
+        }
+    </script>
+</body>
+</html>

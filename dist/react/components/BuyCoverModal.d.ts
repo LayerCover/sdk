@@ -36,3 +36,4 @@ export interface BuyCoverModalProps {
  * ```
  */
 export declare function BuyCoverModal({ open, onClose, signer, poolId, availableBalance, onSuccess, theme: themeOverrides, referralCode, apiBaseUrl, }: BuyCoverModalProps): import("react/jsx-runtime").JSX.Element;
+//# sourceMappingURL=BuyCoverModal.d.ts.map

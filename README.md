@@ -1,247 +1,227 @@
-# LayerCover SDK Integration Guide
+# @layercover/sdk
 
-This SDK allows you to natively integrate LayerCover insurance into your dApp. Users can purchase fixed-rate cover for their deposits directly within your UI.
+The official SDK for integrating [LayerCover](https://layercover.com) decentralized insurance into any application.
 
-## 1. Installation
+## Install
 
 ```bash
 npm install @layercover/sdk ethers
 ```
 
-## 2. Integration Flow
+**Optional peer dependencies** (for React components):
 
-### Import & Initialize
-
-```typescript
-import { LayerCoverSDK } from '@layercover/sdk';
-import { ethers } from 'ethers';
-
-// 1. Setup Provider/Signer
-const provider = new ethers.BrowserProvider(window.ethereum);
-const signer = await provider.getSigner();
-
-// 2. Initialize SDK (Recommended: Auto-fetch configuration)
-const sdk = await LayerCoverSDK.create(signer, { chainId: 84532 });
-
-// Alternative: Manual initialization with specific addresses
-// const sdk = new LayerCoverSDK(signer, policyManagerAddress, {
-//     apiBaseUrl: 'https://app.layercover.com',
-//     deployment: 'base_sepolia_usdc',
-//     chainId: 84532,
-// });
+```bash
+npm install @mui/material @mui/icons-material @emotion/react @emotion/styled react
 ```
 
-> **Note:** The `LayerCoverSDK.create()` method automatically fetches the latest
-> contract addresses from the API, so you never need to update hardcoded addresses.
+**Using viem/wagmi** instead of ethers? No extra install needed — the adapter is built in.
 
-### Steps to Purchase (Fixed-Rate)
+## Quick Start
 
-The purchase flow consists of 4 steps: **Fetch Quotes** -> **Select Quote** -> **Approve** -> **Buy**.
-
-```typescript
-// A. Fetch Available Quotes
-const poolId = 1; // Pool ID for your protocol
-const quotes = await sdk.getFixedRateQuotes(poolId);
-
-if (quotes.length === 0) {
-    console.log("No quotes available from underwriters");
-    return;
-}
-
-// B. Select Best Quote (sorted by rate, lowest first)
-const bestQuote = quotes[0];
-console.log(`Best rate: ${bestQuote.premiumRateBps / 100}% from ${bestQuote.syndicateName}`);
-
-// C. Calculate Premium
-const coverAmount = ethers.parseUnits("1000", 6); // 1000 USDC
-const durationWeeks = 4;
-const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
-const premium = sdk.calculatePremium(coverAmount, bestQuote.premiumRateBps, durationSeconds);
-
-// D. Approve & Purchase
-const approveTx = await sdk.prepareApprovalTx(poolId, premium);
-await signer.sendTransaction(approveTx);
-
-// E. Purchase (simplified method)
-const result = await sdk.purchase(poolId, coverAmount, durationWeeks);
-console.log(`Cover Purchased! TX: ${result.txHash}`);
-if (result.policyId) {
-    console.log(`Policy ID: ${result.policyId}`);
-}
-```
-
-### Alternative: Direct Order Purchase
-
-If a quote has an on-chain sell order, you can use the simpler path:
-
-```typescript
-if (bestQuote.orderId) {
-    const purchaseTx = await sdk.prepareBuyFromQuoteTx(
-        bestQuote.orderId,
-        coverAmount,
-        durationSeconds
-    );
-    await signer.sendTransaction(purchaseTx);
-}
-```
-
-## 3. Displaying "Net APY"
-
-You can use the helper to show users their "Insured APY".
-
-```typescript
-const baseApy = 8.0; // Your protocol's APY (e.g., 8%)
-const { netApy } = LayerCoverSDK.calculateNetYield(baseApy, bestQuote.premiumRateBps);
-
-console.log(`Base APY: ${baseApy}%`);
-console.log(`Insured APY: ${netApy.toFixed(2)}%`); // e.g., "5.00%"
-```
-
-## 4. React Hook
-
-For React applications, use the provided hook:
+### 3-Line React Widget
 
 ```tsx
-import { useLayerCover } from '@layercover/sdk/react';
+import { CoverButton } from '@layercover/sdk/react';
 
-function CoverageWidget({ signer, poolId }) {
-    const {
-        quotes,
-        selectedQuote,
-        bestRate,
-        loading,
-        error,
-        fetchQuotes,
-        selectQuote,
-        calculatePremium,
-        purchase,
-        txStatus,
-    } = useLayerCover({
-        signer,
-        policyManagerAddress: '0x...',
-        poolId,
-        decimals: 6,
-    });
-
-    const handlePurchase = async () => {
-        const result = await purchase('1000', 4); // 1000 USDC, 4 weeks
-        if (result) {
-            console.log('Purchased!', result.policyId);
-        }
-    };
-
-    return (
-        <div>
-            {bestRate && <p>Best Rate: {bestRate / 100}%</p>}
-            <button onClick={handlePurchase} disabled={loading}>
-                {txStatus || 'Buy Cover'}
-            </button>
-            {error && <p style={{color: 'red'}}>{error}</p>}
-        </div>
-    );
-}
+<CoverButton signer={signer} poolId={1} />
 ```
 
-## 5. Quote Structure
+### Headless SDK
 
-Each `FixedRateQuote` contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Unique quote identifier |
-| `poolId` | number | Risk pool ID |
-| `syndicateAddress` | string | Underwriter wallet address |
-| `syndicateName` | string | Human-readable underwriter name |
-| `coverageAmount` | string | Available coverage (BigInt as string) |
-| `premiumRateBps` | number | Rate in basis points (500 = 5%) |
-| `minDurationWeeks` | number | Minimum coverage duration |
-| `maxDurationWeeks` | number | Maximum coverage duration |
-| `orderId` | number? | On-chain sell order ID if posted |
-
-## 6. Error Handling
-
-```typescript
-import { RateTooHighError, NoQuotesAvailableError } from '@layercover/sdk';
-
-try {
-    // Pass maxRateBps to fail if rate exceeds limit
-    await sdk.purchase(poolId, amount, weeks, 500); // max 5%
-} catch (e) {
-    if (e instanceof RateTooHighError) {
-        console.error(`Rate ${e.rate} bps exceeds max ${e.maxRate} bps`);
-    } else if (e instanceof NoQuotesAvailableError) {
-        console.error("No underwriter quotes available for this pool");
-    }
-}
-```
-
-## 7. Contract Addresses
-
-| Chain | PolicyManager | IntentOrderBook |
-|-------|--------------|-----------------|
-| Base Sepolia (84532) | `0x33807f8c7b35E7233e33aFCDB6b3fea0C535c015` | `0x6952Df9bf4615b73B005C79AB19FD53385eD96ae` |
-
-## Migration from Variable-Rate
-
-> ⚠️ **Breaking Change**: The protocol has transitioned to 100% fixed-rate coverage.
-
-The following methods are deprecated:
-
-- `getQuote()` → Use `getFixedRateQuotes()`
-- `preparePurchaseTx()` → Use `prepareBuyFromQuoteTx()` or `purchase()`
-
-See [migration guide](https://docs.layercover.com/sdk-migration) for details.
-
-## 8. Quote Submission (For Underwriters)
-
-Syndicates can programmatically submit coverage quotes:
-
-```typescript
+```ts
 import { LayerCoverSDK } from '@layercover/sdk';
-import { ethers } from 'ethers';
 
-const signer = await provider.getSigner();
-const sdk = new LayerCoverSDK(signer, policyManagerAddr, {
-    apiBaseUrl: 'https://app.layercover.com',
-    chainId: 84532,
-});
+// Auto-configure from API (recommended)
+const sdk = await LayerCoverSDK.create(signer);
 
-// Submit a quote
-const result = await sdk.submitQuote({
-    poolId: 1,
-    syndicateAddress: '0xYourSyndicateVault...',
-    syndicateName: 'My Syndicate',
-    coverageAmount: ethers.parseUnits('10000', 6), // 10,000 USDC
-    premiumRateBps: 500, // 5% APY
-    minDurationWeeks: 4,
-    maxDurationWeeks: 12,
-});
+// Browse pools
+const pools = await sdk.listPools();
 
-console.log('Quote submitted:', result.quoteId);
-
-// Get syndicate exposure
-const exposure = await sdk.getSyndicateExposure('0xYourSyndicateVault...');
-console.log(`Total exposure: $${exposure.totalExposure}`);
-console.log(`Active quotes: ${exposure.activeQuoteCount}`);
-
-// Get all quotes for a syndicate
-const quotes = await sdk.getSyndicateQuotes('0xYourSyndicateVault...');
-
-// Cancel a quote
-await sdk.cancelQuote(result.quoteId);
+// Get quotes & purchase
+const quotes = await sdk.getActiveQuotes(pools[0].poolId);
+const result = await sdk.purchase(pools[0].poolId, coverAmount, durationWeeks);
 ```
 
-### Quote Submission Methods
+### Viem / Wagmi
+
+```ts
+import { LayerCoverSDK, ViemAdapter } from '@layercover/sdk';
+
+const signer = ViemAdapter.fromWalletClient(walletClient);
+const sdk = await LayerCoverSDK.create(signer);
+```
+
+## API Reference
+
+### Pool Discovery
 
 | Method | Description |
 |--------|-------------|
-| `submitQuote(params)` | Submit a new coverage quote with EIP-712 signatures |
-| `cancelQuote(quoteId)` | Cancel an existing quote |
-| `getSyndicateQuotes(address)` | Get all quotes for a syndicate |
-| `getSyndicateExposure(address)` | Get total quoted exposure |
+| `sdk.listPools(options?)` | List all coverage pools with metadata. Filter by `category`, `type`, or `onlyWithCoverage` |
+| `sdk.getPool(poolId)` | Get a single pool by ID |
+| `sdk.getQuotesWithPools(options?)` | Pools enriched with their best available quote in a single call |
+| `sdk.getPoolMetadata(poolId)` | Full on-chain pool metadata including token info |
+| `sdk.getPaymentToken(poolId)` | Payment token address for a pool (usually USDC) |
 
-## 9. Support
+### Quotes
 
-- **Documentation**: [docs.layercover.com](https://docs.layercover.com)
-- **Discord**: [discord.gg/layercover](https://discord.gg/layercover)
-- **GitHub Issues**: Report bugs or request features
+| Method | Description |
+|--------|-------------|
+| `sdk.getFixedRateQuotes(poolId)` | All available fixed-rate quotes, sorted by rate |
+| `sdk.getActiveQuotes(poolId)` | Only active (non-expired) quotes, sorted by rate |
+| `sdk.isQuoteExpired(quote)` | Check if a quote has expired |
+| `sdk.sortQuotesByRate(quotes)` | Sort quotes by premium rate (cheapest first) |
+| `sdk.refreshQuote(quoteId, amount, durationSecs)` | Get a fresh reservation (valid ~10 minutes) |
+| `sdk.getBestRate(poolId)` | Best (lowest) rate available in basis points |
+| `sdk.watchQuotes(poolId, callback, options?)` | Live quote stream with auto-refresh. Returns unsubscribe function |
+
+### Premium Calculation
+
+```ts
+const premium = sdk.calculatePremium(
+  coverageAmount,   // bigint (in token smallest units)
+  rateBps,          // e.g., 500 = 5% annual
+  durationSeconds
+);
+```
+
+### Purchase
+
+| Method | Description |
+|--------|-------------|
+| `sdk.purchase(poolId, amount, weeks, maxRateBps?, referralCode?)` | **Simplified** — auto-picks the best quote and path |
+| `sdk.purchaseWithIntent(quote, amount, durationSecs, referralCode?)` | Intent-based purchase with approval + matching |
+| `sdk.prepareBuyFromQuoteTx(orderId, amount, durationSecs, referralCode?)` | Prepare TX for on-chain sell orders |
+| `sdk.prepareApprovalTx(poolId, amount)` | Prepare an ERC-20 approval for premium |
+
+### Policy Management
+
+```ts
+// List all policies for a wallet
+const policies = await sdk.getMyPolicies('0xabc...');
+const active = policies.filter(p => p.isActive);
+
+// Get details for a specific policy
+const policy = await sdk.getPolicyDetails(42);
+console.log(`Coverage: ${policy.coverage}, Status: ${policy.status}`);
+
+// Cancel an active policy (may incur penalty)
+const cancelTx = await sdk.prepareCancelCoverTx(42);
+await signer.sendTransaction(cancelTx);
+
+// Lapse an expired policy and claim remaining premium
+const lapseTx = await sdk.prepareLapsePolicyTx(42);
+await signer.sendTransaction(lapseTx);
+```
+
+| Method | Description |
+|--------|-------------|
+| `sdk.getMyPolicies(ownerAddress)` | All policies owned by an address (newest first) |
+| `sdk.getPolicyDetails(policyId)` | Full on-chain policy details |
+| `sdk.isPolicyActive(policyId)` | Check if a policy is currently active |
+| `sdk.prepareCancelCoverTx(policyId)` | Prepare a cancellation transaction |
+| `sdk.prepareLapsePolicyTx(policyId)` | Prepare a lapse transaction for an expired policy |
+
+## For Underwriters (Programmatic Quoting)
+
+Syndicates can submit, manage, and cancel coverage quotes on the orderbook — no UI required:
+
+```ts
+// Submit a quote (handles EIP-712 signing automatically)
+const result = await sdk.submitQuote({
+  poolId: 1,
+  syndicateAddress: '0xYourSyndicate...',
+  coverageAmount: ethers.parseUnits('10000', 6),
+  premiumRateBps: 500,   // 5% annual
+  minDurationWeeks: 4,
+  maxDurationWeeks: 12,
+});
+console.log('Quote live:', result.quoteId);
+
+// Monitor exposure
+const exposure = await sdk.getSyndicateExposure('0xYourSyndicate...');
+
+// List & cancel quotes
+const quotes = await sdk.getSyndicateQuotes('0xYourSyndicate...');
+await sdk.cancelQuote(result.quoteId);
+```
+
+| Method | Description |
+|--------|-------------|
+| `sdk.submitQuote(params)` | Submit a signed quote to the orderbook |
+| `sdk.getSyndicateQuotes(address, includeClosed?)` | List quotes for a syndicate |
+| `sdk.getSyndicateExposure(address)` | Total quoted exposure and active quote count |
+| `sdk.cancelQuote(quoteId)` | Cancel an active quote |
+
+See [`examples/submit-quote.js`](examples/submit-quote.js) for a runnable script.
+
+## Error Handling
+
+The SDK provides structured error translation for on-chain reverts, wallet rejections, and network issues:
+
+```ts
+try {
+  await sdk.purchase(1, amount, 4);
+} catch (err) {
+  const msg = LayerCoverSDK.getHumanError(err);
+  // "Insufficient pool capacity. Try a smaller amount or shorter duration."
+  // "Transaction was rejected by the user."
+  // "Insufficient funds for gas fees. Please add ETH to your wallet."
+  showToast(msg);
+}
+```
+
+You can also import the error map directly for custom handling:
+
+```ts
+import { ERROR_MESSAGES, getHumanError } from '@layercover/sdk';
+
+// ERROR_MESSAGES maps 4-byte selectors to user-friendly strings
+const selector = '0xa4264d34';
+console.log(ERROR_MESSAGES[selector]);
+// "Insufficient pool capacity. Try a smaller amount or shorter duration."
+```
+
+Custom error classes are available for specific scenarios:
+
+- `RateTooHighError` — thrown when no quote meets the `maxRateBps` constraint
+- `NoQuotesAvailableError` — thrown when a pool has no active quotes
+
+## React Hooks & Components
+
+```tsx
+import { useLayerCover, BuyCoverModal, CoverButton } from '@layercover/sdk/react';
+```
+
+- **`<CoverButton>`** — Drop-in button that opens a purchase modal
+- **`<BuyCoverModal>`** — Standalone modal with pool picker, quotes, and purchase flow
+- **`useLayerCover()`** — Hook with live quotes, pool discovery, and purchase
+
+## Configuration
+
+The SDK auto-discovers contract addresses via the `/api/config` endpoint. You can override defaults:
+
+```ts
+const sdk = await LayerCoverSDK.create(signer, {
+  apiBaseUrl: 'https://your-deployment.com',  // Default: https://app.layercover.com
+  chainId: 84532,                              // Default: Base Sepolia (84532)
+  deployment: 'base_sepolia_usdc',             // Default: auto-detected
+});
+```
+
+Or construct manually with known addresses:
+
+```ts
+const sdk = new LayerCoverSDK(signer, policyManagerAddress, {
+  intentOrderBookAddress: '0x...',
+  apiBaseUrl: 'http://localhost:3001',
+});
+```
+
+## Documentation
+
+Full docs at [docs.layercover.com/sdk](https://docs.layercover.com/sdk).
+
+## License
+
+MIT

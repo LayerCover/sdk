@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BuyCoverModal = void 0;
+exports.BuyCoverModal = BuyCoverModal;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const react_1 = require("react");
 const theme_1 = require("../theme");
@@ -56,58 +56,10 @@ const FAQ_ITEMS = [
     },
 ];
 /**
- * Known error selectors from LayerCover contracts
+ * Decode error message from contract revert.
+ * Delegates to the centralized error module.
  */
-const ERROR_SELECTORS = {
-    '0xa4264d34': 'Insufficient pool capacity. Try a smaller amount or shorter duration.',
-    '0x8e4a23d6': 'Pool is not active. The pool may be paused or not configured.',
-    '0x6a0d4594': 'Invalid pool configuration. Please contact support.',
-    '0xe450d38c': 'Insufficient token balance. Please check your wallet balance.',
-    '0xfb8f41b2': 'Token transfer failed. Please check your token approval.',
-    '0x7939f424': 'Amount exceeds maximum coverage limit.',
-    '0x3ee5aeb5': 'Unauthorized access. Please check your wallet connection.',
-};
-/**
- * Decode error message from contract revert
- */
-function decodeError(error) {
-    // Check for user rejection
-    if (error?.message?.includes('user rejected') || error?.code === 'ACTION_REJECTED') {
-        return 'Transaction was rejected by user.';
-    }
-    // Extract error data from various error formats
-    let errorData = error?.data || error?.error?.data || '';
-    // If error data is in the message, extract it
-    if (!errorData && error?.message) {
-        const match = error.message.match(/data="(0x[a-fA-F0-9]+)"/);
-        if (match) {
-            errorData = match[1];
-        }
-    }
-    // Check if we have error data with a known selector
-    if (errorData && typeof errorData === 'string' && errorData.startsWith('0x')) {
-        const selector = errorData.slice(0, 10).toLowerCase();
-        if (ERROR_SELECTORS[selector]) {
-            return ERROR_SELECTORS[selector];
-        }
-    }
-    // Check for common error patterns in message
-    const msg = error?.message?.toLowerCase() || '';
-    if (msg.includes('insufficient funds')) {
-        return 'Insufficient funds for transaction gas fees.';
-    }
-    if (msg.includes('execution reverted')) {
-        return 'Transaction would fail. Please try a smaller amount or contact support.';
-    }
-    if (msg.includes('network') || msg.includes('connection')) {
-        return 'Network error. Please check your connection and try again.';
-    }
-    // Return a cleaner version of the original message
-    if (error?.shortMessage) {
-        return error.shortMessage;
-    }
-    return error?.message || 'Failed to get quote. Please try again.';
-}
+const errors_1 = require("../../errors");
 /**
  * Ready-to-use Buy Cover modal component.
  * Import from `@layercover/sdk/react` and provide a signer.
@@ -154,31 +106,30 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
             },
         },
     }), [theme]);
-    // Resolve PolicyManager address from signer's chain
-    const [policyManagerAddress, setPolicyManagerAddress] = (0, react_1.useState)('');
+    // SDK instance — created once from signer, auto-resolves contract addresses
+    const [sdk, setSdk] = (0, react_1.useState)(null);
     const [chainError, setChainError] = (0, react_1.useState)('');
     (0, react_1.useEffect)(() => {
-        const resolveAddress = async () => {
+        const initSdk = async () => {
             if (!signer)
                 return;
             try {
-                const network = await signer.provider?.getNetwork();
-                const chainId = network?.chainId ? Number(network.chainId) : index_1.DEFAULT_CHAIN_ID;
-                const address = (0, index_1.getPolicyManagerAddress)(chainId);
-                setPolicyManagerAddress(address);
+                const instance = await index_1.LayerCoverSDK.create(signer, { apiBaseUrl });
+                setSdk(instance);
                 setChainError('');
             }
             catch (e) {
-                console.error('Failed to resolve chain:', e);
+                console.error('Failed to initialize SDK:', e);
                 setChainError(e.message || 'Unsupported network');
             }
         };
-        resolveAddress();
-    }, [signer]);
+        initSdk();
+    }, [signer, apiBaseUrl]);
     const [activeTab, setActiveTab] = (0, react_1.useState)(0);
     const [amount, setAmount] = (0, react_1.useState)('');
     const [weeks, setWeeks] = (0, react_1.useState)(4);
-    const [quote, setQuote] = (0, react_1.useState)(null);
+    const [bestQuote, setBestQuote] = (0, react_1.useState)(null);
+    const [estimatedPremium, setEstimatedPremium] = (0, react_1.useState)(null);
     const [loading, setLoading] = (0, react_1.useState)(false);
     const [error, setError] = (0, react_1.useState)('');
     const [txStatus, setTxStatus] = (0, react_1.useState)('');
@@ -198,19 +149,19 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
         if (open) {
             setError('');
             setTxStatus('');
-            setQuote(null);
+            setBestQuote(null);
+            setEstimatedPremium(null);
             setActiveTab(0);
         }
     }, [open]);
     // Fetch pool metadata when modal opens
     (0, react_1.useEffect)(() => {
         const fetchMetadata = async () => {
-            if (!open || !signer || !policyManagerAddress) {
+            if (!open || !sdk) {
                 return;
             }
             setMetadataLoading(true);
             try {
-                const sdk = new index_1.LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl });
                 const metadata = await sdk.getPoolMetadata(poolId);
                 setPoolMetadata(metadata);
             }
@@ -223,26 +174,41 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
             }
         };
         fetchMetadata();
-    }, [open, signer, policyManagerAddress, poolId]);
+    }, [open, sdk, poolId]);
     // Auto-fetch quote when amount or weeks change
     (0, react_1.useEffect)(() => {
         const fetchQuote = async () => {
-            if (!signer || !amount || Number(amount) <= 0) {
-                setQuote(null);
+            if (!sdk || !amount || Number(amount) <= 0) {
+                setBestQuote(null);
+                setEstimatedPremium(null);
                 return;
             }
             try {
-                const sdk = new index_1.LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl });
+                const quotes = await sdk.getFixedRateQuotes(poolId);
+                // Get best (cheapest) active quote
+                const activeQuotes = quotes
+                    .filter(q => q.status === 'active' && !index_1.LayerCoverSDK.isQuoteExpired(q))
+                    .sort((a, b) => a.premiumRateBps - b.premiumRateBps);
+                if (activeQuotes.length === 0) {
+                    setBestQuote(null);
+                    setEstimatedPremium(null);
+                    setError('No active quotes available for this pool');
+                    return;
+                }
+                const best = activeQuotes[0];
+                setBestQuote(best);
+                // Calculate premium for display
                 const amountBigInt = (0, ethers_1.parseUnits)(amount, tokenDecimals);
-                const days = weeks * 7;
-                const q = await sdk.getQuote(poolId, amountBigInt, days);
-                setQuote(q);
+                const durationSeconds = weeks * 7 * 24 * 60 * 60;
+                const premium = sdk.calculatePremium(amountBigInt, best.premiumRateBps, durationSeconds);
+                setEstimatedPremium(premium);
                 setError('');
             }
             catch (e) {
                 console.error(e);
-                setQuote(null);
-                const decoded = decodeError(e);
+                setBestQuote(null);
+                setEstimatedPremium(null);
+                const decoded = (0, errors_1.getHumanError)(e);
                 if (decoded !== 'Transaction was rejected by user.') {
                     setError(decoded);
                 }
@@ -250,26 +216,25 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
         };
         const debounce = setTimeout(fetchQuote, 500);
         return () => clearTimeout(debounce);
-    }, [amount, weeks, signer, policyManagerAddress, poolId, tokenDecimals]);
+    }, [amount, weeks, sdk, poolId, tokenDecimals]);
     const handlePurchase = async () => {
-        if (!signer || !quote)
+        if (!sdk || !bestQuote)
             return;
         setLoading(true);
         setTxStatus('Purchasing...');
         try {
-            const sdk = new index_1.LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl });
+            const amountBigInt = (0, ethers_1.parseUnits)(amount, tokenDecimals);
             // Use the unified purchase method which handles both on-chain and intent-based purchases
-            const result = await sdk.purchase(poolId, quote.amount, weeks, undefined, // maxRateBps - let it use best available
+            const result = await sdk.purchase(poolId, amountBigInt, weeks, undefined, // maxRateBps - let it use best available
             referralCode);
             setTxStatus('Success! Cover purchased.');
-            console.log('Purchase result:', result);
             onSuccess?.();
             setTimeout(onClose, 2000);
         }
         catch (e) {
             console.error(e);
             setTxStatus('');
-            setError(decodeError(e));
+            setError((0, errors_1.getHumanError)(e));
         }
         finally {
             setLoading(false);
@@ -310,23 +275,23 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
                                                 color: 'text.secondary',
                                                 fontSize: '0.75rem',
                                             },
-                                        } })] }), quote && ((0, jsx_runtime_1.jsxs)(material_1.Box, { children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", mb: 1, children: "Transaction overview" }), (0, jsx_runtime_1.jsx)(material_1.Box, { sx: {
+                                        } })] }), bestQuote && estimatedPremium !== null && ((0, jsx_runtime_1.jsxs)(material_1.Box, { children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", mb: 1, children: "Transaction overview" }), (0, jsx_runtime_1.jsx)(material_1.Box, { sx: {
                                             backgroundColor: theme.inputBackgroundColor,
                                             borderRadius: theme.inputBorderRadius / 4,
                                             p: 2,
-                                        }, children: (0, jsx_runtime_1.jsxs)(material_1.Stack, { spacing: 2, children: [(0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Premium Rate" }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(quote.rateBps / 100).toFixed(2), "% APY"] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", color: "text.secondary", children: ["Estimated Cost (", weeks, "w)"] }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(0, ethers_1.formatUnits)(quote.premium, tokenDecimals), " ", tokenSymbol] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Coverage Amount" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [tokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: tokenLogoUrl, alt: tokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(0, ethers_1.formatUnits)(quote.amount, tokenDecimals), " ", tokenSymbol] })] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Payout Token" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [payoutTokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: payoutTokenLogoUrl, alt: "USDC", style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: "USDC" })] })] })] }) })] })), error && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "error", variant: "caption", children: error })), txStatus && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "primary", variant: "caption", children: txStatus })), (0, jsx_runtime_1.jsx)(material_1.Button, { variant: "contained", size: "large", fullWidth: true, onClick: handlePurchase, disabled: loading || !quote || !amount, sx: {
+                                        }, children: (0, jsx_runtime_1.jsxs)(material_1.Stack, { spacing: 2, children: [(0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Premium Rate" }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(bestQuote.premiumRateBps / 100).toFixed(2), "% APY"] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", color: "text.secondary", children: ["Estimated Cost (", weeks, "w)"] }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(0, ethers_1.formatUnits)(estimatedPremium, tokenDecimals), " ", tokenSymbol] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Coverage Amount" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [tokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: tokenLogoUrl, alt: tokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [amount, " ", tokenSymbol] })] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Payout Token" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [payoutTokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: payoutTokenLogoUrl, alt: "USDC", style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: "USDC" })] })] })] }) })] })), error && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "error", variant: "caption", children: error })), txStatus && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "primary", variant: "caption", children: txStatus })), (0, jsx_runtime_1.jsx)(material_1.Button, { variant: "contained", size: "large", fullWidth: true, onClick: handlePurchase, disabled: loading || !bestQuote || !amount, sx: {
                                     py: 1.5,
                                     borderRadius: theme.inputBorderRadius / 4,
-                                    background: quote
+                                    background: bestQuote
                                         ? theme.buttonGradient
                                         : undefined,
                                     color: theme.buttonTextColor || '#ffffff',
                                     '&:hover': {
-                                        background: quote
+                                        background: bestQuote
                                             ? theme.buttonGradientHover
                                             : undefined,
                                     },
-                                }, children: loading ? ((0, jsx_runtime_1.jsx)(material_1.CircularProgress, { size: 24, color: "inherit" })) : quote ? ('Confirm Transaction') : ('Enter amount to get quote') })] })) : (
+                                }, children: loading ? ((0, jsx_runtime_1.jsx)(material_1.CircularProgress, { size: 24, color: "inherit" })) : bestQuote ? ('Confirm Transaction') : ('Enter amount to get quote') })] })) : (
                     /* How it works Tab */
                     (0, jsx_runtime_1.jsx)(material_1.Box, { display: "flex", flexDirection: "column", gap: 1.5, children: FAQ_ITEMS.map((item, index) => ((0, jsx_runtime_1.jsxs)(material_1.Accordion, { disableGutters: true, elevation: 0, sx: {
                                 backgroundColor: theme.accordionBackgroundColor,
@@ -366,4 +331,4 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
                                 objectFit: 'contain',
                             } }), (0, jsx_runtime_1.jsx)(OpenInNew_1.default, { sx: { fontSize: 14, color: 'text.secondary' } })] })] }) }));
 }
-exports.BuyCoverModal = BuyCoverModal;
+//# sourceMappingURL=BuyCoverModal.js.map

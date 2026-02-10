@@ -10,6 +10,8 @@ src/
 
 # Config files
 tsconfig.json
+tsconfig.esm.json
+CONTRIBUTING.md
 .eslintrc*
 
 # IDE/Editor

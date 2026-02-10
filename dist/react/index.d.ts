@@ -17,3 +17,4 @@ export { useLayerCover } from './hooks/useLayerCover';
 export type { UseLayerCoverOptions, UseLayerCoverResult } from './hooks/useLayerCover';
 export type { BuyCoverTheme, PresetThemeName } from './theme';
 export { defaultTheme, createTheme, lightTheme, darkTheme, aaveTheme, eulerTheme, compoundTheme, carbonTheme, presetThemes, } from './theme';
+//# sourceMappingURL=index.d.ts.map

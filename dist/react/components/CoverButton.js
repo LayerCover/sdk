@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CoverButton = void 0;
+exports.CoverButton = CoverButton;
 const jsx_runtime_1 = require("react/jsx-runtime");
 const react_1 = require("react");
 const material_1 = require("@mui/material");
@@ -30,4 +30,4 @@ function CoverButton({ signer, poolId, availableBalance = 0, onSuccess, theme, b
     };
     return ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsx)(material_1.Button, { variant: "outlined", color: "success", disabled: disabled || !signer, onClick: () => setIsModalOpen(true), sx: { minWidth: '80px', ...buttonProps?.sx }, ...buttonProps, children: buttonText }), (0, jsx_runtime_1.jsx)(BuyCoverModal_1.BuyCoverModal, { open: isModalOpen, onClose: () => setIsModalOpen(false), signer: signer, poolId: poolId, availableBalance: availableBalance, onSuccess: handleSuccess, theme: theme, referralCode: referralCode, apiBaseUrl: apiBaseUrl })] }));
 }
-exports.CoverButton = CoverButton;
+//# sourceMappingURL=CoverButton.js.map
