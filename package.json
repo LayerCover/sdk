@@ -34,6 +34,8 @@
         "test:watch": "vitest",
         "test:build": "node tests/test-dual-build.mjs",
         "test:legacy": "npx tsx tests/sdk-test.ts",
+        "smoke:testnet": "node examples/smoke-testnet.js --dry-run",
+        "smoke:testnet:execute": "node examples/smoke-testnet.js --execute",
         "changeset": "changeset",
         "version": "changeset version",
         "release": "npm run build && changeset publish"

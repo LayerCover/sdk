@@ -317,6 +317,8 @@ const TOKEN_MATCH_ORDER = ['WETH', 'WBTC', 'USDT', 'USDC', 'ETH', 'DAI', 'BTC'];
  * Get token logo URL from symbol
  */
 export function getTokenLogoUrl(symbol: string): string {
+    if (!symbol) return DEFAULT_TOKEN_LOGO;
+
     // Check exact match first
     if (TOKEN_LOGOS[symbol]) return TOKEN_LOGOS[symbol];
 
@@ -390,6 +392,12 @@ export const DEFAULT_CHAIN_ID = 84532;
  * Default API base URL for LayerCover
  */
 export const DEFAULT_API_BASE_URL = 'https://app.layercover.com';
+const DEFAULT_DEPLOYMENT = 'base_sepolia_usdc';
+const DEFAULT_API_TIMEOUT_MS = 15_000;
+const DEFAULT_API_RETRIES = 2;
+const DEFAULT_API_RETRY_DELAY_MS = 300;
+const DEFAULT_TX_CONFIRMATIONS = 1;
+const DEFAULT_TX_WAIT_TIMEOUT_MS = 180_000;
 
 /**
  * Thrown when the best available premium rate exceeds the caller's maximum.
@@ -428,6 +436,16 @@ export interface LayerCoverSDKOptions {
     deployment?: string;
     /** Chain ID (used to resolve contract addresses) */
     chainId?: number;
+    /** HTTP timeout for SDK API requests (milliseconds). Default: 15000 */
+    requestTimeoutMs?: number;
+    /** Max retry attempts for transient API failures (idempotent methods only). Default: 2 */
+    maxRetries?: number;
+    /** Base delay before retries (milliseconds, exponential backoff). Default: 300 */
+    retryDelayMs?: number;
+    /** Required confirmations before SDK treats a tx as final. Default: 1 */
+    txConfirmations?: number;
+    /** Max time to wait for tx confirmation (milliseconds). Default: 180000 */
+    txWaitTimeoutMs?: number;
     /**
      * Enable SDK debug logging. Pass `true` for console output,
      * or provide a custom `SDKLogger` for structured logging.
@@ -472,6 +490,11 @@ export class LayerCoverSDK {
     private _deployment: string;
     private _chainId: number;
     private _log: SDKLogger;
+    private _requestTimeoutMs: number;
+    private _maxRetries: number;
+    private _retryDelayMs: number;
+    private _txConfirmations: number;
+    private _txWaitTimeoutMs: number;
 
     /** @internal Lazily resolved contract cache */
     private _poolRegistry?: Contract;
@@ -488,16 +511,24 @@ export class LayerCoverSDK {
     ) {
         if ('signMessage' in providerOrSigner) {
             this.signer = providerOrSigner as Signer;
-            this.provider = this.signer.provider!;
+            if (!this.signer.provider) {
+                throw new Error('Signer must be connected to a provider');
+            }
+            this.provider = this.signer.provider;
         } else {
             this.provider = providerOrSigner as Provider;
         }
 
         this._apiBaseUrl = options.apiBaseUrl || DEFAULT_API_BASE_URL;
-        this._deployment = options.deployment || 'base_sepolia_usdc';
+        this._deployment = options.deployment || DEFAULT_DEPLOYMENT;
         this._chainId = options.chainId || DEFAULT_CHAIN_ID;
         this._policyNFTAddress = options.policyNFTAddress;
         this._log = createLogger(options.debug);
+        this._requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? DEFAULT_API_TIMEOUT_MS);
+        this._maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_API_RETRIES);
+        this._retryDelayMs = Math.max(0, options.retryDelayMs ?? DEFAULT_API_RETRY_DELAY_MS);
+        this._txConfirmations = Math.max(1, options.txConfirmations ?? DEFAULT_TX_CONFIRMATIONS);
+        this._txWaitTimeoutMs = Math.max(1_000, options.txWaitTimeoutMs ?? DEFAULT_TX_WAIT_TIMEOUT_MS);
 
         this.policyManager = new Contract(
             policyManagerAddress,
@@ -557,6 +588,35 @@ export class LayerCoverSDK {
         fetchedAt: number;
     } | null = null;
 
+    private static _configFallback(options: {
+        apiBaseUrl?: string;
+        chainId?: number;
+        deployment?: string;
+    }): {
+        contracts: {
+            policyManager: string;
+            intentOrderBook: string;
+        };
+        chainId: number;
+        apiBaseUrl: string;
+        deployment?: string;
+    } {
+        const chainId = options.chainId || DEFAULT_CHAIN_ID;
+        const addresses = CONTRACT_ADDRESSES[chainId];
+        if (!addresses) {
+            throw new Error(`No configuration available for chainId ${chainId}`);
+        }
+        return {
+            contracts: {
+                policyManager: addresses.policyManager,
+                intentOrderBook: addresses.intentOrderBook,
+            },
+            chainId,
+            apiBaseUrl: options.apiBaseUrl || DEFAULT_API_BASE_URL,
+            deployment: options.deployment || DEFAULT_DEPLOYMENT,
+        };
+    }
+
     /**
      * Fetch configuration from the LayerCover API.
      * This allows the SDK to dynamically get contract addresses without hardcoding.
@@ -568,6 +628,9 @@ export class LayerCoverSDK {
         apiBaseUrl?: string;
         chainId?: number;
         deployment?: string;
+        requestTimeoutMs?: number;
+        maxRetries?: number;
+        retryDelayMs?: number;
     } = {}): Promise<{
         contracts: {
             policyManager: string;
@@ -590,23 +653,19 @@ export class LayerCoverSDK {
 
         // Debug logging handled per-instance; static method uses console sparingly
 
-        const response = await fetch(url);
+        let response: Response;
+        try {
+            response = await LayerCoverSDK._fetchWithPolicy(url, {}, {
+                timeoutMs: options.requestTimeoutMs ?? DEFAULT_API_TIMEOUT_MS,
+                retries: options.maxRetries ?? DEFAULT_API_RETRIES,
+                retryDelayMs: options.retryDelayMs ?? DEFAULT_API_RETRY_DELAY_MS,
+            });
+        } catch {
+            return LayerCoverSDK._configFallback(options);
+        }
         if (!response.ok) {
             // Fallback silently — integrators can detect via returned config
-            // Fallback to hardcoded addresses
-            const chainId = options.chainId || DEFAULT_CHAIN_ID;
-            const addresses = CONTRACT_ADDRESSES[chainId];
-            if (!addresses) {
-                throw new Error(`No configuration available for chainId ${chainId}`);
-            }
-            return {
-                contracts: {
-                    policyManager: addresses.policyManager,
-                    intentOrderBook: addresses.intentOrderBook,
-                },
-                chainId,
-                apiBaseUrl: apiBase,
-            };
+            return LayerCoverSDK._configFallback({ ...options, apiBaseUrl: apiBase });
         }
 
         const data = await response.json();
@@ -616,7 +675,7 @@ export class LayerCoverSDK {
         //   2. Deployments array: { deployments: [{ name, chainId, contracts }] }
         let contracts = data.contracts;
         let resolvedChainId = data.chainId || options.chainId || DEFAULT_CHAIN_ID;
-        let resolvedDeployment = data.deployment || options.deployment;
+        let resolvedDeployment = data.deployment || options.deployment || DEFAULT_DEPLOYMENT;
 
         if (!contracts && data.deployments && Array.isArray(data.deployments)) {
             // Find the best matching deployment
@@ -672,22 +731,48 @@ export class LayerCoverSDK {
             apiBaseUrl?: string;
             chainId?: number;
             deployment?: string;
+            debug?: boolean | SDKLogger;
+            requestTimeoutMs?: number;
+            maxRetries?: number;
+            retryDelayMs?: number;
+            txConfirmations?: number;
+            txWaitTimeoutMs?: number;
         } = {}
     ): Promise<LayerCoverSDK> {
+        const requestedApiBase = options.apiBaseUrl || DEFAULT_API_BASE_URL;
+        const requestedChainId = options.chainId || DEFAULT_CHAIN_ID;
+        const requestedDeployment = options.deployment || DEFAULT_DEPLOYMENT;
+
         // Check cache (valid for 5 minutes)
         const cacheValid = LayerCoverSDK._cachedConfig &&
-            (Date.now() - LayerCoverSDK._cachedConfig.fetchedAt) < 5 * 60 * 1000;
+            (Date.now() - LayerCoverSDK._cachedConfig.fetchedAt) < 5 * 60 * 1000 &&
+            LayerCoverSDK._cachedConfig.apiBaseUrl === requestedApiBase &&
+            LayerCoverSDK._cachedConfig.chainId === requestedChainId &&
+            (LayerCoverSDK._cachedConfig.deployment || DEFAULT_DEPLOYMENT) === requestedDeployment;
 
         const config = cacheValid
             ? LayerCoverSDK._cachedConfig!
-            : await LayerCoverSDK.fetchConfig(options);
+            : await LayerCoverSDK.fetchConfig({
+                apiBaseUrl: options.apiBaseUrl,
+                chainId: options.chainId,
+                deployment: options.deployment,
+                requestTimeoutMs: options.requestTimeoutMs,
+                maxRetries: options.maxRetries,
+                retryDelayMs: options.retryDelayMs,
+            });
 
         return new LayerCoverSDK(providerOrSigner, config.contracts.policyManager, {
             intentOrderBookAddress: config.contracts.intentOrderBook,
             policyNFTAddress: (config.contracts as any).policyNFT,
             apiBaseUrl: options.apiBaseUrl || config.apiBaseUrl,
             chainId: config.chainId,
-            deployment: config.deployment,
+            deployment: config.deployment || DEFAULT_DEPLOYMENT,
+            debug: options.debug,
+            requestTimeoutMs: options.requestTimeoutMs,
+            maxRetries: options.maxRetries,
+            retryDelayMs: options.retryDelayMs,
+            txConfirmations: options.txConfirmations,
+            txWaitTimeoutMs: options.txWaitTimeoutMs,
         });
     }
 
@@ -701,10 +786,10 @@ export class LayerCoverSDK {
      * @returns Array of available quotes sorted by rate (lowest first)
      */
     async getFixedRateQuotes(poolId: number): Promise<FixedRateQuote[]> {
-        const url = `${this._apiBaseUrl}/api/quotes?poolId=${poolId}&deployment=${this._deployment}`;
+        const url = `${this._apiBaseUrl}/api/quotes?poolId=${poolId}&deployment=${encodeURIComponent(this._deployment)}`;
         this._log.debug('[LayerCover SDK] Fetching quotes from:', url);
 
-        const response = await fetch(url);
+        const response = await this._fetchApi(url);
         this._log.debug('[LayerCover SDK] Response status:', response.status);
         if (!response.ok) {
             throw new Error(`Failed to fetch quotes: ${response.status} ${response.statusText}`);
@@ -744,9 +829,15 @@ export class LayerCoverSDK {
         amount: bigint,
         durationSeconds: number
     ): Promise<RefreshedQuote> {
+        if (!quoteId || !quoteId.trim()) {
+            throw new Error('quoteId is required');
+        }
+        this._assertPositiveBigInt('amount', amount);
+        this._assertInteger('durationSeconds', durationSeconds, 1);
+
         const url = `${this._apiBaseUrl}/api/quotes`;
 
-        const response = await fetch(url, {
+        const response = await this._fetchApi(url, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -790,7 +881,8 @@ export class LayerCoverSDK {
      * @returns Best rate in basis points, or null if no quotes available
      */
     async getBestRate(poolId: number): Promise<number | null> {
-        const quotes = await this.getFixedRateQuotes(poolId);
+        this._assertInteger('poolId', poolId, 1);
+        const quotes = await this.getActiveQuotes(poolId);
         if (quotes.length === 0) return null;
         return quotes[0].premiumRateBps;
     }
@@ -822,7 +914,7 @@ export class LayerCoverSDK {
     async listPools(options: ListPoolsOptions = {}): Promise<CoveragePool[]> {
         const url = `${this._apiBaseUrl}/api/pools/list?deployment=${encodeURIComponent(this._deployment)}`;
 
-        const response = await fetch(url);
+        const response = await this._fetchApi(url);
         if (!response.ok) {
             throw new Error(`Failed to fetch pools: ${response.status} ${response.statusText}`);
         }
@@ -986,9 +1078,13 @@ export class LayerCoverSDK {
         durationSeconds: number,
         referralCode?: string
     ): Promise<ethers.TransactionRequest> {
+        this._assertInteger('orderId', orderId, 0);
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('durationSeconds', durationSeconds, 1);
         if (!this.intentOrderBook) {
             throw new Error('IntentOrderBook not configured');
         }
+        const normalizedReferralCode = this._normalizeReferralCode(referralCode);
 
         return await this.intentOrderBook.buyFromQuote.populateTransaction(
             orderId,
@@ -997,7 +1093,7 @@ export class LayerCoverSDK {
             ethers.ZeroAddress, // vault (not used for standard coverage)
             0,                  // sharesToCover (not used for standard coverage)
             true, // requiresUpfront
-            referralCode || ethers.ZeroHash
+            normalizedReferralCode
         );
     }
 
@@ -1023,14 +1119,20 @@ export class LayerCoverSDK {
         durationSeconds: number,
         referralCode?: string
     ): Promise<PurchaseResult> {
+        this._assertInteger('quote.poolId', quote?.poolId, 1);
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('durationSeconds', durationSeconds, 1);
         if (!this.signer) {
             throw new Error('Signer required for purchase');
         }
         if (!this.intentOrderBook) {
             throw new Error('IntentOrderBook not configured');
         }
+        await this._assertConfiguredChain();
+        const normalizedReferralCode = this._normalizeReferralCode(referralCode);
 
         const signerAddress = await this.signer.getAddress();
+        const now = Math.floor(Date.now() / 1000);
 
         // 1. Refresh quote to get fresh reservation
         const { reserveIntent, signature } = await this.refreshQuote(
@@ -1059,7 +1161,7 @@ export class LayerCoverSDK {
 
         if (allowance < premiumWithBuffer) {
             const approveTx = await tokenContract.approve(orderBookAddress, ethers.MaxUint256);
-            await approveTx.wait();
+            await this._waitForTx(approveTx);
         }
 
         // 4. Post buy order
@@ -1070,14 +1172,14 @@ export class LayerCoverSDK {
             maxPremiumRateBps: Math.round(quote.premiumRateBps * 1.01), // 1% slippage
             duration: durationSeconds,
             premiumDeposit: premiumWithBuffer,
-            nonce: Math.floor(Date.now() / 1000),
-            expiry: Math.floor(Date.now() / 1000) + 3600, // 1 hour
-            salt: Math.floor(Math.random() * 1000000),
-            referralCode: referralCode || ethers.ZeroHash,
+            nonce: LayerCoverSDK._randomUint(12),
+            expiry: now + 3600, // 1 hour
+            salt: LayerCoverSDK._randomUint(32),
+            referralCode: normalizedReferralCode,
         };
 
         const postTx = await this.intentOrderBook.postBuyOrder(buyOrder);
-        const postReceipt = await postTx.wait();
+        const postReceipt = await this._waitForTx(postTx);
 
         // Extract order ID from event
         const orderBookInterface = new ethers.Interface([
@@ -1130,7 +1232,7 @@ export class LayerCoverSDK {
             signature
         );
 
-        const fillReceipt = await fillTx.wait();
+        const fillReceipt = await this._waitForTx(fillTx);
 
         // Extract policy ID from event
         const fillInterface = new ethers.Interface([
@@ -1173,11 +1275,17 @@ export class LayerCoverSDK {
         maxRateBps?: number,
         referralCode?: string
     ): Promise<PurchaseResult> {
+        this._assertInteger('poolId', poolId, 1);
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('durationWeeks', durationWeeks, 1);
         if (!this.signer) throw new Error('Signer required for purchase');
         if (!this.intentOrderBook) throw new Error('IntentMatcher not configured');
+        await this._assertConfiguredChain();
+        const normalizedReferralCode = this._normalizeReferralCode(referralCode);
 
         const signerAddress = await this.signer.getAddress();
         const intentMatcherAddress = await this.intentOrderBook.getAddress();
+        const now = Math.floor(Date.now() / 1000);
 
         // 1. Fetch available quotes
         const quotes = await this.getFixedRateQuotes(poolId);
@@ -1203,7 +1311,7 @@ export class LayerCoverSDK {
 
         // 2. Refresh quote to get fresh coverageIntent + signature
         const refreshUrl = `${this._apiBaseUrl}/api/quotes`;
-        const refreshResponse = await fetch(refreshUrl, {
+        const refreshResponse = await this._fetchApi(refreshUrl, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1246,7 +1354,7 @@ export class LayerCoverSDK {
         if (allowance < premiumWithBuffer) {
             this._log.debug('[LayerCover SDK] Approving premium spend…');
             const approveTx = await tokenContract.approve(intentMatcherAddress, ethers.MaxUint256);
-            await approveTx.wait();
+            await this._waitForTx(approveTx);
             this._log.debug('[LayerCover SDK] Approval confirmed');
         }
 
@@ -1258,10 +1366,10 @@ export class LayerCoverSDK {
             maxPremiumRateBps: Math.round(bestQuote.premiumRateBps * 1.05), // 5% slippage
             duration: durationSeconds,
             premiumDeposit: premiumWithBuffer,
-            nonce: Math.floor(Date.now() / 1000),
-            expiry: Math.floor(Date.now() / 1000) + 3600, // 1 hour
-            salt: Math.floor(Math.random() * 1000000),
-            referralCode: referralCode || ethers.ZeroHash,
+            nonce: LayerCoverSDK._randomUint(12),
+            expiry: now + 3600, // 1 hour
+            salt: LayerCoverSDK._randomUint(32),
+            referralCode: normalizedReferralCode,
         };
 
         // 6. EIP-712 sign the buy order
@@ -1324,7 +1432,7 @@ export class LayerCoverSDK {
             ethers.ZeroAddress,      // vault (not used for standard coverage)
             0                        // sharesToCover
         );
-        const receipt = await tx.wait();
+        const receipt = await this._waitForTx(tx);
         this._log.debug('[LayerCover SDK] Purchase confirmed:', tx.hash);
 
         // 9. Extract policy ID from PolicyCreated event
@@ -1347,7 +1455,7 @@ export class LayerCoverSDK {
 
         // Mark quote as filled
         try {
-            await fetch(`${this._apiBaseUrl}/api/quotes`, {
+            await this._fetchApi(`${this._apiBaseUrl}/api/quotes`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1485,10 +1593,19 @@ export class LayerCoverSDK {
             whitelistedBuyer = ethers.ZeroAddress,
             intentMatcherAddress,
         } = params;
+        this._assertInteger('poolId', poolId, 1);
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('premiumRateBps', premiumRateBps, 1);
+        this._assertInteger('minDurationWeeks', minDurationWeeks, 1);
+        this._assertInteger('maxDurationWeeks', maxDurationWeeks, minDurationWeeks);
+        this._assertInteger('expiryHours', expiryHours, 1);
 
         const signerAddress = await this.signer.getAddress();
         const network = await this.provider.getNetwork();
         const chainId = Number(network.chainId);
+        if (chainId !== this._chainId) {
+            throw new Error(`Chain mismatch: SDK configured for ${this._chainId}, signer connected to ${chainId}`);
+        }
 
         // Calculate durations in seconds
         const minCoverageDuration = minDurationWeeks * 7 * 24 * 60 * 60;
@@ -1498,7 +1615,7 @@ export class LayerCoverSDK {
         const reservationExpiry = Math.floor(Date.now() / 1000) + expiryHours * 60 * 60;
 
         // Generate nonce and salt
-        const nonce = Date.now();
+        const nonce = LayerCoverSDK._randomUint(12).toString();
         const salt = ethers.hexlify(ethers.randomBytes(32));
 
         // Create Reserve Intent
@@ -1512,7 +1629,7 @@ export class LayerCoverSDK {
             minFillAmount: (minFillAmount ?? (allowPartialFill ? 0n : coverageAmount)).toString(),
             allowPartialFill,
             reservationExpiry,
-            nonce: nonce.toString(),
+            nonce,
             whitelistedBuyer,
             minPremiumBps: premiumRateBps, // Use premium rate as the floor
             cancellationPenaltyBps: 0, // No early cancellation penalty by default
@@ -1556,7 +1673,7 @@ export class LayerCoverSDK {
             minPremiumBps: 0,
             minDuration: minCoverageDuration,
             maxDuration: maxCoverageDuration,
-            nonce: nonce.toString(),
+            nonce,
             expiry: reservationExpiry,
             salt,
             requiresUpfront: true,
@@ -1622,7 +1739,7 @@ export class LayerCoverSDK {
             createdAt: new Date().toISOString(),
         };
 
-        const response = await fetch(`${this._apiBaseUrl}/api/quotes`, {
+        const response = await this._fetchApi(`${this._apiBaseUrl}/api/quotes`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(quoteData),
@@ -1661,7 +1778,7 @@ export class LayerCoverSDK {
      * @param quoteId The quote ID to cancel
      */
     async cancelQuote(quoteId: string): Promise<boolean> {
-        const response = await fetch(`${this._apiBaseUrl}/api/quotes?quoteId=${encodeURIComponent(quoteId)}`, {
+        const response = await this._fetchApi(`${this._apiBaseUrl}/api/quotes?quoteId=${encodeURIComponent(quoteId)}`, {
             method: 'DELETE',
         });
 
@@ -1681,7 +1798,7 @@ export class LayerCoverSDK {
     async getSyndicateQuotes(syndicateAddress: string, includeClosed = false): Promise<FixedRateQuote[]> {
         const url = `${this._apiBaseUrl}/api/quotes?syndicateAddress=${encodeURIComponent(syndicateAddress)}&includeClosed=${includeClosed}`;
 
-        const response = await fetch(url);
+        const response = await this._fetchApi(url);
         if (!response.ok) {
             throw new Error(`Failed to fetch syndicate quotes: ${response.status}`);
         }
@@ -1710,7 +1827,7 @@ export class LayerCoverSDK {
         totalExposure: string;
         activeQuoteCount: number;
     }> {
-        const response = await fetch(
+        const response = await this._fetchApi(
             `${this._apiBaseUrl}/api/quotes/exposure?syndicateAddress=${encodeURIComponent(syndicateAddress)}`
         );
 
@@ -1880,7 +1997,7 @@ export class LayerCoverSDK {
 
         const bestQuote = quotes[0];
 
-        if (bestQuote.orderId) {
+        if (bestQuote.orderId !== undefined && bestQuote.orderId !== null) {
             // Use buyFromQuote path
             // Use provided duration or fallback to max duration (legacy behavior)
             const duration = durationSeconds || bestQuote.maxDurationWeeks * 7 * 24 * 60 * 60;
@@ -1895,6 +2012,138 @@ export class LayerCoverSDK {
     // ========================================================================
     // PRIVATE HELPERS
     // ========================================================================
+
+    private static async _sleep(ms: number): Promise<void> {
+        await new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    private static _isRetryableStatus(status: number): boolean {
+        return status === 408 || status === 429 || status >= 500;
+    }
+
+    private static _isRetryableFetchError(error: unknown): boolean {
+        const message = String((error as any)?.message || '').toLowerCase();
+        return message.includes('network')
+            || message.includes('fetch')
+            || message.includes('timeout')
+            || message.includes('timed out')
+            || message.includes('econnreset')
+            || message.includes('etimedout')
+            || message.includes('socket');
+    }
+
+    private static async _fetchWithPolicy(
+        url: string,
+        init: RequestInit,
+        policy: {
+            timeoutMs: number;
+            retries: number;
+            retryDelayMs: number;
+            retryOnNonIdempotent?: boolean;
+            logger?: SDKLogger;
+        }
+    ): Promise<Response> {
+        const method = (init.method || 'GET').toUpperCase();
+        const idempotentMethods = method === 'GET' || method === 'HEAD' || method === 'OPTIONS' || method === 'DELETE';
+        const retries = (idempotentMethods || policy.retryOnNonIdempotent)
+            ? Math.max(0, policy.retries)
+            : 0;
+
+        let lastError: unknown;
+
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), policy.timeoutMs);
+
+            try {
+                const response = await fetch(url, { ...init, signal: controller.signal });
+                clearTimeout(timeout);
+
+                if (LayerCoverSDK._isRetryableStatus(response.status) && attempt < retries) {
+                    try {
+                        await response.body?.cancel();
+                    } catch { }
+                    policy.logger?.warn(`[LayerCover SDK] API retry ${attempt + 1}/${retries} after HTTP ${response.status}: ${method} ${url}`);
+                    await LayerCoverSDK._sleep(policy.retryDelayMs * (2 ** attempt));
+                    continue;
+                }
+
+                return response;
+            } catch (error) {
+                clearTimeout(timeout);
+
+                const timedOut = (error as any)?.name === 'AbortError';
+                lastError = timedOut
+                    ? new Error(`Request timed out after ${policy.timeoutMs}ms: ${method} ${url}`)
+                    : error;
+
+                if (attempt < retries && (timedOut || LayerCoverSDK._isRetryableFetchError(error))) {
+                    policy.logger?.warn(`[LayerCover SDK] API retry ${attempt + 1}/${retries} after ${timedOut ? 'timeout' : 'network error'}: ${method} ${url}`);
+                    await LayerCoverSDK._sleep(policy.retryDelayMs * (2 ** attempt));
+                    continue;
+                }
+
+                throw lastError;
+            }
+        }
+
+        throw (lastError instanceof Error
+            ? lastError
+            : new Error(`Request failed: ${method} ${url}`));
+    }
+
+    private async _fetchApi(
+        url: string,
+        init: RequestInit = {},
+        options: { retries?: number; timeoutMs?: number; retryOnNonIdempotent?: boolean } = {}
+    ): Promise<Response> {
+        return LayerCoverSDK._fetchWithPolicy(url, init, {
+            timeoutMs: options.timeoutMs ?? this._requestTimeoutMs,
+            retries: options.retries ?? this._maxRetries,
+            retryDelayMs: this._retryDelayMs,
+            retryOnNonIdempotent: options.retryOnNonIdempotent ?? false,
+            logger: this._log,
+        });
+    }
+
+    private async _waitForTx(tx: ethers.TransactionResponse): Promise<ethers.TransactionReceipt> {
+        const receipt = await tx.wait(this._txConfirmations, this._txWaitTimeoutMs);
+        if (!receipt) {
+            throw new Error(`Transaction ${tx.hash} was not confirmed`);
+        }
+        if (receipt.status === 0) {
+            throw new Error(`Transaction ${tx.hash} reverted`);
+        }
+        return receipt;
+    }
+
+    private _assertInteger(name: string, value: unknown, min: number): void {
+        if (!Number.isInteger(value) || (value as number) < min) {
+            throw new Error(`${name} must be an integer >= ${min}`);
+        }
+    }
+
+    private _assertPositiveBigInt(name: string, value: unknown): void {
+        if (typeof value !== 'bigint' || value <= 0n) {
+            throw new Error(`${name} must be > 0`);
+        }
+    }
+
+    private _normalizeReferralCode(referralCode?: string): string {
+        if (!referralCode) return ethers.ZeroHash;
+        if (!/^0x[a-fA-F0-9]{64}$/.test(referralCode)) {
+            throw new Error('referralCode must be a bytes32 hex string (0x + 64 hex chars)');
+        }
+        return referralCode.toLowerCase();
+    }
+
+    private async _assertConfiguredChain(): Promise<void> {
+        const network = await this.provider.getNetwork();
+        const connectedChainId = Number(network.chainId);
+        if (connectedChainId !== this._chainId) {
+            throw new Error(`Chain mismatch: SDK configured for ${this._chainId}, signer connected to ${connectedChainId}`);
+        }
+    }
 
     private async _ensureContracts() {
         if (this._poolRegistry) return;
@@ -1926,6 +2175,10 @@ export class LayerCoverSDK {
                 'function previewRate(uint256 poolId, uint256 sold, uint256 availableCapital) view returns (uint256)'
             ], this.provider);
         }
+    }
+
+    private static _randomUint(bytes: number): bigint {
+        return ethers.toBigInt(ethers.randomBytes(bytes));
     }
 
     // ========================================================================
@@ -1990,13 +2243,17 @@ export class LayerCoverSDK {
             filterInactive?: boolean;
         } = {}
     ): () => void {
+        this._assertInteger('poolId', poolId, 1);
         const interval = options.refreshIntervalMs ?? 30_000;
+        this._assertInteger('refreshIntervalMs', interval, 1_000);
         const filterExpired = options.filterExpired ?? true;
         const filterInactive = options.filterInactive ?? true;
         let stopped = false;
+        let inFlight = false;
 
         const refresh = async () => {
-            if (stopped) return;
+            if (stopped || inFlight) return;
+            inFlight = true;
             try {
                 let quotes = await this.getFixedRateQuotes(poolId);
 
@@ -2016,6 +2273,8 @@ export class LayerCoverSDK {
             } catch (err) {
                 // Silently continue on network errors — the next cycle will retry
                 this._log.warn('[LayerCover SDK] Quote refresh failed:', (err as Error).message);
+            } finally {
+                inFlight = false;
             }
         };
 
@@ -2123,7 +2382,7 @@ export class LayerCoverSDK {
         // Primary: use the API endpoint (same as the dashboard)
         try {
             const url = `${this._apiBaseUrl}/api/policies/user/${ownerAddress.toLowerCase()}`;
-            const response = await fetch(url);
+            const response = await this._fetchApi(url);
             if (response.ok) {
                 const data = await response.json();
                 if (data.policies && Array.isArray(data.policies)) {

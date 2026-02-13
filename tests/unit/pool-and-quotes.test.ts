@@ -147,12 +147,31 @@ describe('listPools', () => {
     it('throws on HTTP error', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: false,
-            status: 500,
-            statusText: 'Internal Server Error',
+            status: 400,
+            statusText: 'Bad Request',
         });
 
         const sdk = createMockSDK();
         await expect(sdk.listPools()).rejects.toThrow('Failed to fetch pools');
+    });
+
+    it('retries transient 5xx errors for GET endpoints', async () => {
+        fetchMock
+            .mockResolvedValueOnce({
+                ok: false,
+                status: 503,
+                statusText: 'Service Unavailable',
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ pools: mockPools }),
+            });
+
+        const sdk = createMockSDK();
+        const pools = await sdk.listPools();
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(pools).toHaveLength(2);
     });
 });
 
@@ -227,6 +246,24 @@ describe('getFixedRateQuotes', () => {
         const quotes = await sdk.getFixedRateQuotes(1);
         expect(quotes).toHaveLength(0);
     });
+
+    it('URL-encodes deployment when fetching quotes', async () => {
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ quotes: [] }),
+        });
+
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const sdk = new LayerCoverSDK(provider, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'test/deployment value',
+            chainId: 84532,
+        });
+        await sdk.getFixedRateQuotes(1);
+
+        const calledUrl = String(fetchMock.mock.calls[0]?.[0] || '');
+        expect(calledUrl).toContain('deployment=test%2Fdeployment%20value');
+    });
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -262,7 +299,7 @@ describe('getBestRate', () => {
 
         const sdk = createMockSDK();
         const best = await sdk.getBestRate(1);
-        expect(best).toBe(200); // q3 has rate 200 (even though expired)
+        expect(best).toBe(300); // q3 is expired; best active is q1 @ 300
     });
 
     it('returns null when no quotes', async () => {
@@ -274,6 +311,46 @@ describe('getBestRate', () => {
         const sdk = createMockSDK();
         const best = await sdk.getBestRate(1);
         expect(best).toBeNull();
+    });
+});
+
+describe('validation guards', () => {
+    it('rejects refreshQuote with invalid amount before network call', async () => {
+        const sdk = createMockSDK();
+        await expect(sdk.refreshQuote('q1', 0n, 604800)).rejects.toThrow('amount must be > 0');
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid referralCode in prepareBuyFromQuoteTx', async () => {
+        const sdk = createMockSDK();
+        await expect(
+            sdk.prepareBuyFromQuoteTx(1, 1n, 604800, 'not-a-bytes32')
+        ).rejects.toThrow('referralCode must be a bytes32 hex string');
+    });
+
+    it('rejects watchQuotes with invalid interval', () => {
+        const sdk = createMockSDK();
+        expect(() => sdk.watchQuotes(1, () => { }, { refreshIntervalMs: 0 })).toThrow(
+            'refreshIntervalMs must be an integer >= 1000'
+        );
+    });
+
+    it('prevents overlapping watchQuotes refresh calls', async () => {
+        vi.useFakeTimers();
+        try {
+            const pendingResponse = new Promise(() => { });
+            fetchMock.mockReturnValue(pendingResponse as any);
+
+            const sdk = createMockSDK();
+            const stop = sdk.watchQuotes(1, () => { }, { refreshIntervalMs: 1000 });
+
+            await vi.advanceTimersByTimeAsync(5000);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            stop();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 
@@ -330,6 +407,7 @@ describe('refreshQuote', () => {
 
         const sdk = createMockSDK();
         await expect(sdk.refreshQuote('q1', 1000000n, 604800)).rejects.toThrow('Quote expired');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -443,8 +521,43 @@ describe('LayerCoverSDK.fetchConfig', () => {
             status: 500,
         });
 
-        const config = await LayerCoverSDK.fetchConfig({ chainId: 84532 });
+        const config = await LayerCoverSDK.fetchConfig({ chainId: 84532, maxRetries: 0 });
         expect(config.contracts.policyManager).toMatch(/^0x/);
+    });
+
+    it('falls back to hardcoded addresses on fetch throw', async () => {
+        fetchMock.mockRejectedValueOnce(new Error('Network unreachable'));
+
+        const config = await LayerCoverSDK.fetchConfig({
+            apiBaseUrl: 'https://test.layercover.com',
+            chainId: 84532,
+        });
+
+        expect(config.contracts.policyManager).toMatch(/^0x/);
+        expect(config.apiBaseUrl).toBe('https://test.layercover.com');
+    });
+
+    it('retries transient API failures before succeeding', async () => {
+        fetchMock
+            .mockResolvedValueOnce({
+                ok: false,
+                status: 503,
+                statusText: 'Service Unavailable',
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    contracts: {
+                        policyManager: '0x1111111111111111111111111111111111111111',
+                        intentOrderBook: '0x2222222222222222222222222222222222222222',
+                    },
+                    chainId: 84532,
+                }),
+            });
+
+        const config = await LayerCoverSDK.fetchConfig({ chainId: 84532, maxRetries: 1, retryDelayMs: 0 });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(config.contracts.policyManager).toBe('0x1111111111111111111111111111111111111111');
     });
 
     it('handles deployments array format', async () => {
@@ -466,5 +579,88 @@ describe('LayerCoverSDK.fetchConfig', () => {
 
         const config = await LayerCoverSDK.fetchConfig({ deployment: 'base_sepolia_usdc' });
         expect(config.contracts.policyManager).toBe('0x3333333333333333333333333333333333333333');
+    });
+});
+
+// ──────────────────────────────────────────────────────────────
+// create (static cache behavior)
+// ──────────────────────────────────────────────────────────────
+
+describe('LayerCoverSDK.create cache behavior', () => {
+    beforeEach(() => {
+        LayerCoverSDK._cachedConfig = null;
+    });
+
+    it('reuses cache for matching apiBase/chain/deployment', async () => {
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+                contracts: {
+                    policyManager: '0x1111111111111111111111111111111111111111',
+                    intentOrderBook: '0x2222222222222222222222222222222222222222',
+                },
+                chainId: 84532,
+                deployment: 'dep_a',
+                apiBaseUrl: 'https://test.layercover.com',
+            }),
+        });
+
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        await LayerCoverSDK.create(provider, {
+            apiBaseUrl: 'https://test.layercover.com',
+            chainId: 84532,
+            deployment: 'dep_a',
+        });
+        await LayerCoverSDK.create(provider, {
+            apiBaseUrl: 'https://test.layercover.com',
+            chainId: 84532,
+            deployment: 'dep_a',
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('refetches when deployment changes', async () => {
+        fetchMock
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    contracts: {
+                        policyManager: '0x1111111111111111111111111111111111111111',
+                        intentOrderBook: '0x2222222222222222222222222222222222222222',
+                    },
+                    chainId: 84532,
+                    deployment: 'dep_a',
+                    apiBaseUrl: 'https://test.layercover.com',
+                }),
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    contracts: {
+                        policyManager: '0x3333333333333333333333333333333333333333',
+                        intentOrderBook: '0x4444444444444444444444444444444444444444',
+                    },
+                    chainId: 84532,
+                    deployment: 'dep_b',
+                    apiBaseUrl: 'https://test.layercover.com',
+                }),
+            });
+
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const sdkA = await LayerCoverSDK.create(provider, {
+            apiBaseUrl: 'https://test.layercover.com',
+            chainId: 84532,
+            deployment: 'dep_a',
+        });
+        const sdkB = await LayerCoverSDK.create(provider, {
+            apiBaseUrl: 'https://test.layercover.com',
+            chainId: 84532,
+            deployment: 'dep_b',
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(await sdkA.policyManager.getAddress()).toBe('0x1111111111111111111111111111111111111111');
+        expect(await sdkB.policyManager.getAddress()).toBe('0x3333333333333333333333333333333333333333');
     });
 });

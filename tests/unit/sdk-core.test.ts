@@ -16,6 +16,7 @@ import {
     getIntentOrderBookAddress,
     getTokenLogoUrl,
 } from '../../src/index';
+import { Wallet, JsonRpcProvider } from 'ethers';
 
 // ──────────────────────────────────────────────────────────────
 // Constants
@@ -97,6 +98,11 @@ describe('getTokenLogoUrl', () => {
     it('returns default logo for unknown token', () => {
         const url = getTokenLogoUrl('SOME_UNKNOWN_TOKEN');
         expect(url).toContain('usdc'); // default is USDC logo
+    });
+
+    it('returns default logo for empty symbol', () => {
+        const url = getTokenLogoUrl('');
+        expect(url).toContain('usdc');
     });
 });
 
@@ -264,5 +270,24 @@ describe('LayerCoverSDK.sortQuotesByRate', () => {
     it('handles single element', () => {
         const quotes = [makeQuote('a', 500)];
         expect(LayerCoverSDK.sortQuotesByRate(quotes)).toEqual(quotes);
+    });
+});
+
+describe('LayerCoverSDK constructor', () => {
+    it('throws when signer is not connected to a provider', () => {
+        const wallet = Wallet.createRandom();
+        expect(() => new LayerCoverSDK(wallet, '0x' + '11'.repeat(20))).toThrow(
+            'Signer must be connected to a provider'
+        );
+    });
+
+    it('rejects purchase on chain mismatch', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', 1, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), { chainId: 84532 });
+
+        await expect(sdk.purchase(1, 1n, 1)).rejects.toThrow(
+            'Chain mismatch: SDK configured for 84532, signer connected to 1'
+        );
     });
 });

@@ -72,7 +72,7 @@ const sdk = await LayerCoverSDK.create(signer);
 | `sdk.isQuoteExpired(quote)` | Check if a quote has expired |
 | `sdk.sortQuotesByRate(quotes)` | Sort quotes by premium rate (cheapest first) |
 | `sdk.refreshQuote(quoteId, amount, durationSecs)` | Get a fresh reservation (valid ~10 minutes) |
-| `sdk.getBestRate(poolId)` | Best (lowest) rate available in basis points |
+| `sdk.getBestRate(poolId)` | Best (lowest) **active** rate available in basis points |
 | `sdk.watchQuotes(poolId, callback, options?)` | Live quote stream with auto-refresh. Returns unsubscribe function |
 
 ### Premium Calculation
@@ -206,6 +206,11 @@ const sdk = await LayerCoverSDK.create(signer, {
   apiBaseUrl: 'https://your-deployment.com',  // Default: https://app.layercover.com
   chainId: 84532,                              // Default: Base Sepolia (84532)
   deployment: 'base_sepolia_usdc',             // Default: auto-detected
+  requestTimeoutMs: 15_000,                    // Default: 15000
+  maxRetries: 2,                               // Default: 2 (idempotent API calls)
+  retryDelayMs: 300,                           // Default: 300 (exponential backoff base)
+  txConfirmations: 1,                          // Default: 1
+  txWaitTimeoutMs: 180_000,                    // Default: 180000
 });
 ```
 
@@ -215,7 +220,35 @@ Or construct manually with known addresses:
 const sdk = new LayerCoverSDK(signer, policyManagerAddress, {
   intentOrderBookAddress: '0x...',
   apiBaseUrl: 'http://localhost:3001',
+  requestTimeoutMs: 20_000,
+  maxRetries: 1,
+  txConfirmations: 2,
 });
+```
+
+Referral code note:
+`purchase(...)` and `prepareBuyFromQuoteTx(...)` expect `referralCode` as bytes32 hex (`0x` + 64 hex chars).
+
+## Testnet Smoke Test
+
+From `packages/sdk`:
+
+```bash
+# Safe mode (no tx sent): create -> listPools -> getBestRate -> purchase prechecks
+yarn smoke:testnet
+
+# Live transaction mode (sends tx)
+PRIVATE_KEY=0x... yarn smoke:testnet:execute
+```
+
+Script:
+- `examples/smoke-testnet.js`
+
+Common options:
+
+```bash
+node examples/smoke-testnet.js --dry-run --pool-id=1 --amount-usdc=25 --weeks=4
+node examples/smoke-testnet.js --execute --pool-id=1 --amount-usdc=25 --weeks=4 --max-rate-bps=700
 ```
 
 ## Documentation
