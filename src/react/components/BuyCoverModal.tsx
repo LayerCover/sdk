@@ -231,8 +231,8 @@ export function BuyCoverModal({
                 const metadata = await sdk.getPoolMetadata(poolId);
                 setPoolMetadata(metadata);
             } catch (e: any) {
-                console.error('Failed to fetch pool metadata:', e);
-                setError('Failed to load pool information');
+                console.warn('Failed to fetch pool metadata:', e);
+                setPoolMetadata(null);
             } finally {
                 setMetadataLoading(false);
             }
@@ -246,6 +246,9 @@ export function BuyCoverModal({
             if (!sdk || !amount || Number(amount) <= 0) {
                 setBestQuote(null);
                 setEstimatedPremium(null);
+                if (!chainError) {
+                    setError('');
+                }
                 return;
             }
 
@@ -374,7 +377,7 @@ export function BuyCoverModal({
                                         Amount
                                     </Typography>
                                     <Typography variant="caption" color="text.secondary">
-                                        Enter the amount of {tokenSymbol} cover
+                                        Enter the amount of {tokenSymbol ? `${tokenSymbol} ` : ''}cover
                                     </Typography>
                                 </Stack>
                                 <TextField

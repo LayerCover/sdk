@@ -160,8 +160,8 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
                 setPoolMetadata(metadata);
             }
             catch (e) {
-                console.error('Failed to fetch pool metadata:', e);
-                setError('Failed to load pool information');
+                console.warn('Failed to fetch pool metadata:', e);
+                setPoolMetadata(null);
             }
             finally {
                 setMetadataLoading(false);
@@ -175,6 +175,9 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
             if (!sdk || !amount || Number(amount) <= 0) {
                 setBestQuote(null);
                 setEstimatedPremium(null);
+                if (!chainError) {
+                    setError('');
+                }
                 return;
             }
             try {
@@ -253,7 +256,7 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
                     /* Loading state */
                     _jsx(Box, { display: "flex", justifyContent: "center", alignItems: "center", py: 8, children: _jsx(CircularProgress, {}) })) : activeTab === 0 ? (
                     /* Purchase Tab */
-                    _jsxs(Box, { display: "flex", flexDirection: "column", gap: 5, children: [_jsxs(Box, { children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", mb: 1, children: [_jsx(Typography, { variant: "body2", fontWeight: "medium", children: "Amount" }), _jsxs(Typography, { variant: "caption", color: "text.secondary", children: ["Enter the amount of ", tokenSymbol, " cover"] })] }), _jsx(TextField, { value: amount, onChange: (e) => setAmount(e.target.value), type: "text", inputProps: {
+                    _jsxs(Box, { display: "flex", flexDirection: "column", gap: 5, children: [_jsxs(Box, { children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", mb: 1, children: [_jsx(Typography, { variant: "body2", fontWeight: "medium", children: "Amount" }), _jsxs(Typography, { variant: "caption", color: "text.secondary", children: ["Enter the amount of ", tokenSymbol ? `${tokenSymbol} ` : '', "cover"] })] }), _jsx(TextField, { value: amount, onChange: (e) => setAmount(e.target.value), type: "text", inputProps: {
                                             inputMode: 'decimal',
                                             pattern: '[0-9]*\\.?[0-9]*',
                                         }, fullWidth: true, placeholder: "0.00", InputProps: {

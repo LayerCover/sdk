@@ -318,6 +318,16 @@ export interface LayerCoverSDKOptions {
     deployment?: string;
     /** Chain ID (used to resolve contract addresses) */
     chainId?: number;
+    /** HTTP timeout for SDK API requests (milliseconds). Default: 15000 */
+    requestTimeoutMs?: number;
+    /** Max retry attempts for transient API failures (idempotent methods only). Default: 2 */
+    maxRetries?: number;
+    /** Base delay before retries (milliseconds, exponential backoff). Default: 300 */
+    retryDelayMs?: number;
+    /** Required confirmations before SDK treats a tx as final. Default: 1 */
+    txConfirmations?: number;
+    /** Max time to wait for tx confirmation (milliseconds). Default: 180000 */
+    txWaitTimeoutMs?: number;
     /**
      * Enable SDK debug logging. Pass `true` for console output,
      * or provide a custom `SDKLogger` for structured logging.
@@ -356,6 +366,11 @@ export declare class LayerCoverSDK {
     private _deployment;
     private _chainId;
     private _log;
+    private _requestTimeoutMs;
+    private _maxRetries;
+    private _retryDelayMs;
+    private _txConfirmations;
+    private _txWaitTimeoutMs;
     /** @internal Lazily resolved contract cache */
     private _poolRegistry?;
     private _underwriterManager?;
@@ -378,6 +393,7 @@ export declare class LayerCoverSDK {
         deployment?: string;
         fetchedAt: number;
     } | null;
+    private static _configFallback;
     /**
      * Fetch configuration from the LayerCover API.
      * This allows the SDK to dynamically get contract addresses without hardcoding.
@@ -389,6 +405,9 @@ export declare class LayerCoverSDK {
         apiBaseUrl?: string;
         chainId?: number;
         deployment?: string;
+        requestTimeoutMs?: number;
+        maxRetries?: number;
+        retryDelayMs?: number;
     }): Promise<{
         contracts: {
             policyManager: string;
@@ -422,6 +441,12 @@ export declare class LayerCoverSDK {
         apiBaseUrl?: string;
         chainId?: number;
         deployment?: string;
+        debug?: boolean | SDKLogger;
+        requestTimeoutMs?: number;
+        maxRetries?: number;
+        retryDelayMs?: number;
+        txConfirmations?: number;
+        txWaitTimeoutMs?: number;
     }): Promise<LayerCoverSDK>;
     /**
      * Fetch available fixed-rate quotes from the orderbook API
@@ -695,7 +720,18 @@ export declare class LayerCoverSDK {
      * @deprecated Use prepareBuyFromQuoteTx() or purchase() for the fixed-rate model.
      */
     preparePurchaseTx(poolId: number, coverAmount: bigint, maxPremium: bigint, referralCode?: string, durationSeconds?: number): Promise<ethers.TransactionRequest>;
+    private static _sleep;
+    private static _isRetryableStatus;
+    private static _isRetryableFetchError;
+    private static _fetchWithPolicy;
+    private _fetchApi;
+    private _waitForTx;
+    private _assertInteger;
+    private _assertPositiveBigInt;
+    private _normalizeReferralCode;
+    private _assertConfiguredChain;
     private _ensureContracts;
+    private static _randomUint;
     /**
      * Calculate the net yield after deducting insurance cost.
      * Useful for showing integrators the true yield on insured positions.

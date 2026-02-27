@@ -166,8 +166,8 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
                 setPoolMetadata(metadata);
             }
             catch (e) {
-                console.error('Failed to fetch pool metadata:', e);
-                setError('Failed to load pool information');
+                console.warn('Failed to fetch pool metadata:', e);
+                setPoolMetadata(null);
             }
             finally {
                 setMetadataLoading(false);
@@ -181,6 +181,9 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
             if (!sdk || !amount || Number(amount) <= 0) {
                 setBestQuote(null);
                 setEstimatedPremium(null);
+                if (!chainError) {
+                    setError('');
+                }
                 return;
             }
             try {
@@ -259,7 +262,7 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
                     /* Loading state */
                     (0, jsx_runtime_1.jsx)(material_1.Box, { display: "flex", justifyContent: "center", alignItems: "center", py: 8, children: (0, jsx_runtime_1.jsx)(material_1.CircularProgress, {}) })) : activeTab === 0 ? (
                     /* Purchase Tab */
-                    (0, jsx_runtime_1.jsxs)(material_1.Box, { display: "flex", flexDirection: "column", gap: 5, children: [(0, jsx_runtime_1.jsxs)(material_1.Box, { children: [(0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", mb: 1, children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: "Amount" }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "caption", color: "text.secondary", children: ["Enter the amount of ", tokenSymbol, " cover"] })] }), (0, jsx_runtime_1.jsx)(material_1.TextField, { value: amount, onChange: (e) => setAmount(e.target.value), type: "text", inputProps: {
+                    (0, jsx_runtime_1.jsxs)(material_1.Box, { display: "flex", flexDirection: "column", gap: 5, children: [(0, jsx_runtime_1.jsxs)(material_1.Box, { children: [(0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", mb: 1, children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: "Amount" }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "caption", color: "text.secondary", children: ["Enter the amount of ", tokenSymbol ? `${tokenSymbol} ` : '', "cover"] })] }), (0, jsx_runtime_1.jsx)(material_1.TextField, { value: amount, onChange: (e) => setAmount(e.target.value), type: "text", inputProps: {
                                             inputMode: 'decimal',
                                             pattern: '[0-9]*\\.?[0-9]*',
                                         }, fullWidth: true, placeholder: "0.00", InputProps: {
