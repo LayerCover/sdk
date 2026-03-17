@@ -24,6 +24,8 @@ export interface CoverButtonProps {
     referralCode?: string;
     /** Optional API base URL for quotes (default: https://app.layercover.com) */
     apiBaseUrl?: string;
+    /** Optional deployment identifier (for example, `avalanche_fuji_usdc`) */
+    deployment?: string;
 }
 
 /**
@@ -54,6 +56,7 @@ export function CoverButton({
     buttonProps,
     referralCode,
     apiBaseUrl,
+    deployment,
 }: CoverButtonProps) {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -84,6 +87,7 @@ export function CoverButton({
                 theme={theme}
                 referralCode={referralCode}
                 apiBaseUrl={apiBaseUrl}
+                deployment={deployment}
             />
         </>
     );

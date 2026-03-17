@@ -1,4 +1,4 @@
-import { BrowserProvider, JsonRpcProvider } from 'ethers';
+import { BrowserProvider, JsonRpcProvider } from 'ethers-v6';
 /**
  * Helpers to adapt Ethers v5 objects to Ethers v6 for SDK compatibility.
  */

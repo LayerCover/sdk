@@ -1,10 +1,14 @@
-import { ethers, Contract } from 'ethers';
+import { ethers, Contract } from 'ethers-v6';
 import { getHumanError as _getHumanError } from './errors';
 export * from './adapters';
 export * from './viem-adapter';
 export { ERROR_MESSAGES, getHumanError } from './errors';
 const BPS = 10000n;
 const SECS_YEAR = 31536000n; // 365 days exactly — canonical for premium math
+const MAX_BPS = 10000;
+const DEFAULT_GUARDED_DEADLINE_SECONDS = 15 * 60;
+const DEFAULT_GUARDED_DEPOSIT_SLIPPAGE_BPS = 50;
+const DEFAULT_GUARDED_MINT_SLIPPAGE_BPS = 50;
 const NOOP_LOG = () => { };
 function createLogger(debug) {
     if (typeof debug === 'object' && debug !== null)
@@ -71,17 +75,76 @@ const DEFAULT_POOL_CONFIG = {
 };
 const USDC_LOGO_URL = 'https://cryptologos.cc/logos/usd-coin-usdc-logo.png';
 /**
- * Contract addresses for LayerCover deployments
- * Key is chainId
+ * Legacy chain-level fallback addresses.
+ * Prefer deployment-aware config via `/api/config` when available.
  */
 export const CONTRACT_ADDRESSES = {
-    // Base Sepolia (testnet) — synced with /api/config as of Feb 2026
+    // Base Sepolia (testnet) — synced with /api/config as of Mar 2026
     84532: {
         policyManager: '0xbd0Cb34253c84201F746F0A9DF062d82c0823c56',
         intentOrderBook: '0x7865f2e07dFe0d4dC4345bF5DFFFAd757a901337',
+        poolRegistry: '0xB65cE4662FFB20aE7Ddd7314B975F8A1b6dA4e59',
     },
-    // Base Mainnet — addresses will be populated at mainnet launch.
-    // Intentionally omitted to prevent silent misconfiguration.
+    // Avalanche Fuji (testnet)
+    43113: {
+        policyManager: '0xe2fC6C13ABd4FdD8656F4e3985Bf3481aA586dce',
+        intentOrderBook: '0x221e12F38Be3d1C49Ac126fa739a402652cc18aE',
+        poolRegistry: '0xAE2273A1c40f2b8449463752Ce4a0445F3DA502C',
+    },
+    // Ethereum Sepolia (testnet)
+    11155111: {
+        policyManager: '0xa83A38e37153b59F329204eed0948284b046ac97',
+        intentOrderBook: '0x0278E36b7e0214b0912c16460b741Ff526801e5E',
+        poolRegistry: '0x00667d277699c4a33BC699be6393c320589819A0',
+    },
+    // Local development
+    31337: {
+        policyManager: '0xc5415607F07b8554354e7689B37B0ED6DAA13205',
+        intentOrderBook: '0x2DacaDb603699Fa3367aBE99BB27dD88f5753274',
+        poolRegistry: '0x026EF62C333f443Ea68F6ffa659A8Faf781492b7',
+    },
+};
+export const DEPLOYMENT_FALLBACK_CONFIGS = {
+    base_sepolia_usdc: {
+        chainId: 84532,
+        contracts: {
+            policyManager: '0xbd0Cb34253c84201F746F0A9DF062d82c0823c56',
+            intentOrderBook: '0x7865f2e07dFe0d4dC4345bF5DFFFAd757a901337',
+            poolRegistry: '0xB65cE4662FFB20aE7Ddd7314B975F8A1b6dA4e59',
+        },
+    },
+    base_sepolia_wsteth: {
+        chainId: 84532,
+        contracts: {
+            policyManager: '0x1d2c6275dC7DE388E793F6b7B73B93515dEC1B9f',
+            intentOrderBook: '0x2715F9faE2e38d24D921480b85f9bCd489bFa5D4',
+            poolRegistry: '0x6218439dFd31656a8AC508D7A5e52bEF9eFEf378',
+        },
+    },
+    avalanche_fuji_usdc: {
+        chainId: 43113,
+        contracts: {
+            policyManager: '0xe2fC6C13ABd4FdD8656F4e3985Bf3481aA586dce',
+            intentOrderBook: '0x221e12F38Be3d1C49Ac126fa739a402652cc18aE',
+            poolRegistry: '0xAE2273A1c40f2b8449463752Ce4a0445F3DA502C',
+        },
+    },
+    ethereum_sepolia_usdc: {
+        chainId: 11155111,
+        contracts: {
+            policyManager: '0xa83A38e37153b59F329204eed0948284b046ac97',
+            intentOrderBook: '0x0278E36b7e0214b0912c16460b741Ff526801e5E',
+            poolRegistry: '0x00667d277699c4a33BC699be6393c320589819A0',
+        },
+    },
+    localhost_usdc: {
+        chainId: 31337,
+        contracts: {
+            policyManager: '0xc5415607F07b8554354e7689B37B0ED6DAA13205',
+            intentOrderBook: '0x2DacaDb603699Fa3367aBE99BB27dD88f5753274',
+            poolRegistry: '0x026EF62C333f443Ea68F6ffa659A8Faf781492b7',
+        },
+    },
 };
 /**
  * Get the PolicyManager address for a given chain
@@ -176,10 +239,11 @@ export class LayerCoverSDK {
         else {
             this.provider = providerOrSigner;
         }
-        this._apiBaseUrl = options.apiBaseUrl || DEFAULT_API_BASE_URL;
+        this._apiBaseUrl = (options.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
         this._deployment = options.deployment || DEFAULT_DEPLOYMENT;
         this._chainId = options.chainId || DEFAULT_CHAIN_ID;
         this._policyNFTAddress = options.policyNFTAddress;
+        this._poolRegistryAddress = options.poolRegistryAddress || CONTRACT_ADDRESSES[this._chainId]?.poolRegistry;
         this._log = createLogger(options.debug);
         this._requestTimeoutMs = Math.max(1000, options.requestTimeoutMs ?? DEFAULT_API_TIMEOUT_MS);
         this._maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_API_RETRIES);
@@ -192,6 +256,7 @@ export class LayerCoverSDK {
             'function underwriterManager() view returns (address)',
             'function rateEngine() view returns (address)',
             'function capitalPool() view returns (address)',
+            'function REGISTRY() view returns (address)',
             'function policyNFT() view returns (address)',
             'function isPolicyActive(uint256 policyId) view returns (bool)',
             'function cancelCover(uint256 policyId)',
@@ -202,19 +267,70 @@ export class LayerCoverSDK {
             CONTRACT_ADDRESSES[this._chainId]?.intentOrderBook;
         if (orderBookAddress && orderBookAddress !== ethers.ZeroAddress) {
             this.intentOrderBook = new Contract(orderBookAddress, [
-                // Buy from existing on-chain sell order (with vault coverage support and referral code)
-                'function buyFromQuote(uint256 orderId, uint256 coverageAmount, uint256 duration, address vault, uint256 sharesToCover, bool requiresUpfront, bytes32 referralCode) external returns (uint256 policyId)',
-                // Post a buy order (with referral code)
-                'function postBuyOrder(tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode) order) external returns (uint256 orderId)',
-                // Fill a buy order with intent (with vault coverage support)
-                'function fillBuyOrder(uint256 orderId, uint256 offerRateBps, uint256 fillAmount, address vault, uint256 sharesToCover, bool requiresUpfront, tuple(address solver, address underwriter, uint256 poolId, uint32 minCoverageDuration, uint32 maxCoverageDuration, uint256 coverageAmount, uint256 minFillAmount, bool allowPartialFill, uint64 reservationExpiry, uint96 nonce, address whitelistedBuyer, uint16 minPremiumBps, uint16 cancellationPenaltyBps) reserveIntent, bytes signature) external returns (uint256 policyId)',
-                // Get sell order details
-                'function getSellOrder(uint256 orderId) view returns (tuple(address syndicate, address solver, uint256 poolId, uint256 minCoverageDuration, uint256 maxCoverageDuration, uint256 remainingCoverage, uint256 minFillAmount, uint256 rateBps, uint64 expiry, bytes32 reservationKey, bool cancelled, bool filled, uint16 cancellationPenaltyBps))',
-                'function getUnfilledSellOrders(uint256 poolId) view returns (uint256[])',
+                // Current IntentMatcher entrypoint (supports Permit2 + vault-cover order fields)
+                'function executeMatchedIntent(tuple(address maker, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 minDuration, uint256 maxDuration, uint256 nonce, uint256 expiry, uint256 salt, bool requiresUpfront, uint16 cancellationPenaltyBps, uint256 minFillAmount, address whitelistedBuyer)[] intents, bytes[] intentSignatures, tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode, address vault, uint256 sharesToCover) order, bytes orderSignature, uint256[] fillAmounts, address vault, uint256 sharesToCover, uint256 permit2Nonce, uint256 permit2Deadline, bytes permit2Signature) external returns (uint256[])',
             ], this.signer || this.provider);
         }
     }
+    static _getDefaultDeploymentForChain(chainId) {
+        if (!chainId)
+            return undefined;
+        for (const [deployment, config] of Object.entries(DEPLOYMENT_FALLBACK_CONFIGS)) {
+            if (config.chainId === chainId)
+                return deployment;
+        }
+        return chainId === DEFAULT_CHAIN_ID ? DEFAULT_DEPLOYMENT : undefined;
+    }
+    static _getFallbackDeploymentConfig(deployment) {
+        if (!deployment)
+            return undefined;
+        return DEPLOYMENT_FALLBACK_CONFIGS[deployment];
+    }
+    static _isCacheValid(cache, requestedApiBase, options) {
+        if ((Date.now() - cache.fetchedAt) >= 5 * 60 * 1000)
+            return false;
+        if (cache.apiBaseUrl !== requestedApiBase)
+            return false;
+        if (options.deployment) {
+            if ((cache.deployment || DEFAULT_DEPLOYMENT) !== options.deployment)
+                return false;
+        }
+        else if (options.chainId) {
+            if (cache.chainId !== options.chainId)
+                return false;
+            const defaultDeployment = LayerCoverSDK._getDefaultDeploymentForChain(options.chainId);
+            if (defaultDeployment && (cache.deployment || DEFAULT_DEPLOYMENT) !== defaultDeployment)
+                return false;
+        }
+        else if ((cache.deployment || DEFAULT_DEPLOYMENT) !== DEFAULT_DEPLOYMENT) {
+            return false;
+        }
+        if (options.chainId && cache.chainId !== options.chainId)
+            return false;
+        return true;
+    }
     static _configFallback(options) {
+        const apiBaseUrl = (options.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+        if (options.deployment) {
+            const deploymentConfig = LayerCoverSDK._getFallbackDeploymentConfig(options.deployment);
+            if (!deploymentConfig) {
+                throw new Error(`Unable to resolve deployment "${options.deployment}" without /api/config. ` +
+                    'Pass explicit contract addresses or a supported chainId.');
+            }
+            if (options.chainId && deploymentConfig.chainId !== options.chainId) {
+                throw new Error(`Deployment "${options.deployment}" is configured for chain ${deploymentConfig.chainId}, not ${options.chainId}`);
+            }
+            return {
+                contracts: {
+                    policyManager: deploymentConfig.contracts.policyManager,
+                    intentOrderBook: deploymentConfig.contracts.intentOrderBook,
+                    poolRegistry: deploymentConfig.contracts.poolRegistry,
+                },
+                chainId: deploymentConfig.chainId,
+                apiBaseUrl,
+                deployment: options.deployment,
+            };
+        }
         const chainId = options.chainId || DEFAULT_CHAIN_ID;
         const addresses = CONTRACT_ADDRESSES[chainId];
         if (!addresses) {
@@ -224,10 +340,11 @@ export class LayerCoverSDK {
             contracts: {
                 policyManager: addresses.policyManager,
                 intentOrderBook: addresses.intentOrderBook,
+                poolRegistry: addresses.poolRegistry,
             },
             chainId,
-            apiBaseUrl: options.apiBaseUrl || DEFAULT_API_BASE_URL,
-            deployment: options.deployment || DEFAULT_DEPLOYMENT,
+            apiBaseUrl,
+            deployment: LayerCoverSDK._getDefaultDeploymentForChain(chainId) || DEFAULT_DEPLOYMENT,
         };
     }
     /**
@@ -238,7 +355,7 @@ export class LayerCoverSDK {
      * @returns Contract configuration
      */
     static async fetchConfig(options = {}) {
-        const apiBase = options.apiBaseUrl || DEFAULT_API_BASE_URL;
+        const apiBase = (options.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
         // Build query params
         const params = new URLSearchParams();
         if (options.chainId)
@@ -267,14 +384,25 @@ export class LayerCoverSDK {
         //   1. Direct: { contracts: {...}, chainId, ... }
         //   2. Deployments array: { deployments: [{ name, chainId, contracts }] }
         let contracts = data.contracts;
-        let resolvedChainId = data.chainId || options.chainId || DEFAULT_CHAIN_ID;
-        let resolvedDeployment = data.deployment || options.deployment || DEFAULT_DEPLOYMENT;
+        let resolvedChainId = data.chainId || options.chainId;
+        let resolvedDeployment = data.deployment || options.deployment;
         if (!contracts && data.deployments && Array.isArray(data.deployments)) {
-            // Find the best matching deployment
-            const targetDeployment = options.deployment || 'base_sepolia_usdc';
-            const match = data.deployments.find((d) => d.name === targetDeployment)
-                || data.deployments.find((d) => d.chainId === (options.chainId || DEFAULT_CHAIN_ID))
-                || data.deployments[0];
+            let match;
+            if (options.deployment) {
+                match = data.deployments.find((d) => d.name === options.deployment);
+                if (!match) {
+                    throw new Error(`Deployment "${options.deployment}" not found in API config response`);
+                }
+            }
+            else if (options.chainId) {
+                match = data.deployments.find((d) => d.chainId === options.chainId);
+                if (!match) {
+                    throw new Error(`No deployment found in API config response for chainId ${options.chainId}`);
+                }
+            }
+            else {
+                match = data.deployments[0];
+            }
             if (match) {
                 contracts = match.contracts;
                 resolvedChainId = match.chainId || resolvedChainId;
@@ -283,6 +411,35 @@ export class LayerCoverSDK {
         }
         if (!contracts) {
             throw new Error('No contracts found in API config response');
+        }
+        resolvedChainId = resolvedChainId || DEFAULT_CHAIN_ID;
+        resolvedDeployment =
+            resolvedDeployment ||
+                LayerCoverSDK._getDefaultDeploymentForChain(resolvedChainId) ||
+                DEFAULT_DEPLOYMENT;
+        if (options.chainId && resolvedChainId !== options.chainId) {
+            throw new Error(`Deployment resolved to chain ${resolvedChainId}, expected ${options.chainId}`);
+        }
+        if (options.deployment && resolvedDeployment !== options.deployment) {
+            throw new Error(`Deployment resolved to "${resolvedDeployment}", expected "${options.deployment}"`);
+        }
+        const deploymentFallback = LayerCoverSDK._getFallbackDeploymentConfig(resolvedDeployment)?.contracts || {};
+        const chainFallbackAddresses = CONTRACT_ADDRESSES[resolvedChainId] || {};
+        contracts = {
+            ...contracts,
+            policyManager: contracts.policyManager || deploymentFallback.policyManager || chainFallbackAddresses.policyManager,
+            intentOrderBook: contracts.intentOrderBook ||
+                contracts.intentMatcher ||
+                deploymentFallback.intentOrderBook ||
+                chainFallbackAddresses.intentOrderBook,
+            intentMatcher: contracts.intentMatcher ||
+                contracts.intentOrderBook ||
+                deploymentFallback.intentOrderBook ||
+                chainFallbackAddresses.intentOrderBook,
+            poolRegistry: contracts.poolRegistry || deploymentFallback.poolRegistry || chainFallbackAddresses.poolRegistry,
+        };
+        if (!contracts.policyManager || !contracts.intentOrderBook) {
+            throw new Error(`Incomplete contracts in API config for chain ${resolvedChainId}`);
         }
         // Cache the config for 5 minutes
         LayerCoverSDK._cachedConfig = {
@@ -313,19 +470,17 @@ export class LayerCoverSDK {
      * ```
      */
     static async create(providerOrSigner, options = {}) {
-        const requestedApiBase = options.apiBaseUrl || DEFAULT_API_BASE_URL;
-        const requestedChainId = options.chainId || DEFAULT_CHAIN_ID;
-        const requestedDeployment = options.deployment || DEFAULT_DEPLOYMENT;
+        const requestedApiBase = (options.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
         // Check cache (valid for 5 minutes)
         const cacheValid = LayerCoverSDK._cachedConfig &&
-            (Date.now() - LayerCoverSDK._cachedConfig.fetchedAt) < 5 * 60 * 1000 &&
-            LayerCoverSDK._cachedConfig.apiBaseUrl === requestedApiBase &&
-            LayerCoverSDK._cachedConfig.chainId === requestedChainId &&
-            (LayerCoverSDK._cachedConfig.deployment || DEFAULT_DEPLOYMENT) === requestedDeployment;
+            LayerCoverSDK._isCacheValid(LayerCoverSDK._cachedConfig, requestedApiBase, {
+                chainId: options.chainId,
+                deployment: options.deployment,
+            });
         const config = cacheValid
             ? LayerCoverSDK._cachedConfig
             : await LayerCoverSDK.fetchConfig({
-                apiBaseUrl: options.apiBaseUrl,
+                apiBaseUrl: requestedApiBase,
                 chainId: options.chainId,
                 deployment: options.deployment,
                 requestTimeoutMs: options.requestTimeoutMs,
@@ -335,7 +490,8 @@ export class LayerCoverSDK {
         return new LayerCoverSDK(providerOrSigner, config.contracts.policyManager, {
             intentOrderBookAddress: config.contracts.intentOrderBook,
             policyNFTAddress: config.contracts.policyNFT,
-            apiBaseUrl: options.apiBaseUrl || config.apiBaseUrl,
+            poolRegistryAddress: config.contracts.poolRegistry,
+            apiBaseUrl: requestedApiBase,
             chainId: config.chainId,
             deployment: config.deployment || DEFAULT_DEPLOYMENT,
             debug: options.debug,
@@ -380,9 +536,9 @@ export class LayerCoverSDK {
         return quotes.sort((a, b) => a.premiumRateBps - b.premiumRateBps);
     }
     /**
-     * Refresh a quote to get a fresh reservation (Flash Quote)
+     * Refresh a quote by signing a new intent client-side and submitting it.
      * This is required before executing an intent-based purchase.
-     * The returned reservation is valid for ~10 minutes.
+     * The signer creates a fresh CoverageIntent, signs it, and submits to PUT.
      *
      * @param quoteId The quote ID to refresh
      * @param amount Coverage amount to reserve
@@ -395,15 +551,83 @@ export class LayerCoverSDK {
         }
         this._assertPositiveBigInt('amount', amount);
         this._assertInteger('durationSeconds', durationSeconds, 1);
+        if (!this.signer) {
+            throw new Error('Signer required for quote refresh');
+        }
+        // First, fetch the existing quote to get syndicate address and pool info
+        const getUrl = `${this._apiBaseUrl}/api/quotes?quoteId=${encodeURIComponent(quoteId)}`;
+        const getResponse = await this._fetchApi(getUrl);
+        if (!getResponse.ok) {
+            const err = await getResponse.json().catch(() => ({}));
+            throw new Error(err.error || `Failed to fetch quote: ${getResponse.status}`);
+        }
+        const existingData = await getResponse.json();
+        const existingQuote = existingData.quote || existingData.quotes?.[0];
+        if (!existingQuote) {
+            throw new Error('Quote not found');
+        }
+        if (existingQuote.status === 'expired' || (existingQuote.expiresAt && new Date(existingQuote.expiresAt).getTime() < Date.now())) {
+            throw new Error('Quote expired');
+        }
+        const syndicateAddress = existingQuote.syndicateAddress;
+        const poolId = existingQuote.poolId;
+        // Create a fresh CoverageIntent
+        const now = Math.floor(Date.now() / 1000);
+        const newExpiry = now + 600; // 10 minutes for reservation
+        const nonce = LayerCoverSDK._randomUint(12).toString();
+        const salt = ethers.hexlify(ethers.randomBytes(32));
+        const newIntent = {
+            maker: syndicateAddress,
+            poolId,
+            coverageAmount: amount.toString(),
+            premiumRateBps: existingQuote.premiumRateBps || existingQuote.coverageIntent?.premiumRateBps || 0,
+            minPremiumBps: 0,
+            minDuration: durationSeconds,
+            maxDuration: durationSeconds,
+            nonce,
+            expiry: newExpiry,
+            salt,
+            requiresUpfront: true,
+            cancellationPenaltyBps: 0,
+            minFillAmount: '0',
+            whitelistedBuyer: existingQuote.whitelistedBuyer || ethers.ZeroAddress,
+        };
+        // Resolve IntentMatcher for signing domain
+        const addresses = CONTRACT_ADDRESSES[this._chainId];
+        const intentMatcher = addresses?.intentOrderBook;
+        if (!intentMatcher || intentMatcher === ethers.ZeroAddress) {
+            throw new Error(`IntentMatcher address not found for chain ${this._chainId}`);
+        }
+        const intentDomain = {
+            ...LayerCoverSDK.COVERAGE_INTENT_DOMAIN,
+            chainId: this._chainId,
+            verifyingContract: intentMatcher,
+        };
+        const intentValue = {
+            maker: newIntent.maker,
+            poolId: newIntent.poolId,
+            coverageAmount: BigInt(newIntent.coverageAmount),
+            premiumRateBps: newIntent.premiumRateBps,
+            minDuration: newIntent.minDuration,
+            maxDuration: newIntent.maxDuration,
+            nonce: BigInt(newIntent.nonce),
+            expiry: newIntent.expiry,
+            salt: BigInt(newIntent.salt),
+            requiresUpfront: newIntent.requiresUpfront,
+            cancellationPenaltyBps: newIntent.cancellationPenaltyBps,
+            minFillAmount: BigInt(newIntent.minFillAmount),
+            whitelistedBuyer: newIntent.whitelistedBuyer,
+        };
+        const intentSignature = await this.signer.signTypedData(intentDomain, LayerCoverSDK.COVERAGE_INTENT_TYPES, intentValue);
+        // Submit to PUT — intent signature serves as auth (no separate header needed)
         const url = `${this._apiBaseUrl}/api/quotes`;
         const response = await this._fetchApi(url, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 quoteId,
-                amount: amount.toString(),
-                duration: durationSeconds,
-                chainId: this._chainId,
+                coverageIntent: newIntent,
+                intentSignature,
             }),
         });
         if (!response.ok) {
@@ -411,11 +635,10 @@ export class LayerCoverSDK {
             throw new Error(errorData.error || `Failed to refresh quote: ${response.status}`);
         }
         const data = await response.json();
-        // API returns coverageIntent, normalize to reserveIntent shape
-        const intent = data.reserveIntent || data.coverageIntent;
+        const intent = data.coverageIntent || newIntent;
         return {
             reserveIntent: intent,
-            signature: data.signature || data.intentSignature,
+            signature: data.signature || data.intentSignature || intentSignature,
         };
     }
     /**
@@ -436,7 +659,7 @@ export class LayerCoverSDK {
      * @returns Best rate in basis points, or null if no quotes available
      */
     async getBestRate(poolId) {
-        this._assertInteger('poolId', poolId, 1);
+        this._assertInteger('poolId', poolId, 0);
         const quotes = await this.getActiveQuotes(poolId);
         if (quotes.length === 0)
             return null;
@@ -613,24 +836,14 @@ export class LayerCoverSDK {
         this._assertInteger('orderId', orderId, 0);
         this._assertPositiveBigInt('coverageAmount', coverageAmount);
         this._assertInteger('durationSeconds', durationSeconds, 1);
-        if (!this.intentOrderBook) {
-            throw new Error('IntentOrderBook not configured');
-        }
-        const normalizedReferralCode = this._normalizeReferralCode(referralCode);
-        return await this.intentOrderBook.buyFromQuote.populateTransaction(orderId, coverageAmount, durationSeconds, ethers.ZeroAddress, // vault (not used for standard coverage)
-        0, // sharesToCover (not used for standard coverage)
-        true, // requiresUpfront
-        normalizedReferralCode);
+        // Validate even though this path is legacy, so callers still get deterministic errors.
+        void referralCode;
+        throw new Error('prepareBuyFromQuoteTx is deprecated for current IntentMatcher deployments. ' +
+            'Use purchase(...) or purchaseWithIntent(...) instead.');
     }
     /**
      * Execute a full purchase flow using the intent system.
-     * Use this when the quote doesn't have an on-chain sell order (orderId).
-     *
-     * Steps:
-     * 1. Refresh the quote to get a fresh reservation
-     * 2. Approve premium spending
-     * 3. Post buy order
-     * 4. Fill buy order with the reserve intent
+     * Uses the current IntentMatcher `executeMatchedIntent` path.
      *
      * @param quote The quote to purchase from
      * @param coverageAmount Amount of coverage to purchase
@@ -639,7 +852,7 @@ export class LayerCoverSDK {
      * @returns Transaction hash and policy ID
      */
     async purchaseWithIntent(quote, coverageAmount, durationSeconds, referralCode) {
-        this._assertInteger('quote.poolId', quote?.poolId, 1);
+        this._assertInteger('quote.poolId', quote?.poolId, 0);
         this._assertPositiveBigInt('coverageAmount', coverageAmount);
         this._assertInteger('durationSeconds', durationSeconds, 1);
         if (!this.signer) {
@@ -650,103 +863,7 @@ export class LayerCoverSDK {
         }
         await this._assertConfiguredChain();
         const normalizedReferralCode = this._normalizeReferralCode(referralCode);
-        const signerAddress = await this.signer.getAddress();
-        const now = Math.floor(Date.now() / 1000);
-        // 1. Refresh quote to get fresh reservation
-        const { reserveIntent, signature } = await this.refreshQuote(quote.id, coverageAmount, durationSeconds);
-        // 2. Calculate premium with buffer
-        const premium = this.calculatePremium(coverageAmount, quote.premiumRateBps, durationSeconds);
-        const premiumWithBuffer = (premium * 105n) / 100n; // 5% buffer
-        // 3. Approve payment token
-        const paymentToken = await this.getPaymentToken(quote.poolId);
-        const tokenContract = new Contract(paymentToken, [
-            'function approve(address spender, uint256 amount) returns (bool)',
-            'function allowance(address owner, address spender) view returns (uint256)',
-        ], this.signer);
-        const orderBookAddress = await this.intentOrderBook.getAddress();
-        const allowance = await tokenContract.allowance(signerAddress, orderBookAddress);
-        if (allowance < premiumWithBuffer) {
-            const approveTx = await tokenContract.approve(orderBookAddress, ethers.MaxUint256);
-            await this._waitForTx(approveTx);
-        }
-        // 4. Post buy order
-        const buyOrder = {
-            taker: signerAddress,
-            poolId: quote.poolId,
-            coverageAmount: coverageAmount,
-            maxPremiumRateBps: Math.round(quote.premiumRateBps * 1.01), // 1% slippage
-            duration: durationSeconds,
-            premiumDeposit: premiumWithBuffer,
-            nonce: LayerCoverSDK._randomUint(12),
-            expiry: now + 3600, // 1 hour
-            salt: LayerCoverSDK._randomUint(32),
-            referralCode: normalizedReferralCode,
-        };
-        const postTx = await this.intentOrderBook.postBuyOrder(buyOrder);
-        const postReceipt = await this._waitForTx(postTx);
-        // Extract order ID from event
-        const orderBookInterface = new ethers.Interface([
-            'event BuyOrderPosted(uint256 indexed orderId, address indexed buyer, uint256 poolId, uint256 initialCoverage, uint256 maxRateBps, uint32 duration, uint256 premiumDeposit)',
-        ]);
-        let orderId = null;
-        for (const log of postReceipt.logs) {
-            try {
-                const parsed = orderBookInterface.parseLog(log);
-                if (parsed?.name === 'BuyOrderPosted') {
-                    orderId = parsed.args.orderId;
-                    break;
-                }
-            }
-            catch {
-                continue;
-            }
-        }
-        if (orderId === null) {
-            throw new Error('Failed to extract order ID from transaction');
-        }
-        // 5. Fill buy order with reserve intent
-        // Map API field names (maker/minDuration/maxDuration) to contract struct fields
-        const intentStruct = {
-            solver: reserveIntent.solver || reserveIntent.maker || ethers.ZeroAddress,
-            underwriter: reserveIntent.underwriter || reserveIntent.maker || ethers.ZeroAddress,
-            poolId: reserveIntent.poolId,
-            minCoverageDuration: reserveIntent.minCoverageDuration || reserveIntent.minDuration || 0,
-            maxCoverageDuration: reserveIntent.maxCoverageDuration || reserveIntent.maxDuration || 0,
-            coverageAmount: BigInt(reserveIntent.coverageAmount),
-            minFillAmount: BigInt(reserveIntent.minFillAmount || '0'),
-            allowPartialFill: reserveIntent.allowPartialFill ?? false,
-            reservationExpiry: reserveIntent.reservationExpiry || reserveIntent.expiry || 0,
-            nonce: BigInt(reserveIntent.nonce),
-            whitelistedBuyer: reserveIntent.whitelistedBuyer || ethers.ZeroAddress,
-            minPremiumBps: reserveIntent.minPremiumBps ?? 0,
-            cancellationPenaltyBps: reserveIntent.cancellationPenaltyBps ?? 0,
-        };
-        const fillTx = await this.intentOrderBook.fillBuyOrder(orderId, quote.premiumRateBps, coverageAmount, ethers.ZeroAddress, // vault (not used for standard coverage)
-        0, // sharesToCover (not used for standard coverage)
-        true, // requiresUpfront
-        intentStruct, signature);
-        const fillReceipt = await this._waitForTx(fillTx);
-        // Extract policy ID from event
-        const fillInterface = new ethers.Interface([
-            'event BuyOrderFilled(uint256 indexed orderId, address indexed filler, uint256 policyId)',
-        ]);
-        let policyId;
-        for (const log of fillReceipt.logs) {
-            try {
-                const parsed = fillInterface.parseLog(log);
-                if (parsed?.name === 'BuyOrderFilled') {
-                    policyId = parsed.args.policyId.toString();
-                    break;
-                }
-            }
-            catch {
-                continue;
-            }
-        }
-        return {
-            txHash: fillTx.hash,
-            policyId,
-        };
+        return this._executeQuotePurchase(quote, coverageAmount, durationSeconds, normalizedReferralCode);
     }
     /**
      * Simplified purchase method - automatically chooses best path
@@ -759,7 +876,7 @@ export class LayerCoverSDK {
      * @returns Transaction hash and policy ID
      */
     async purchase(poolId, coverageAmount, durationWeeks, maxRateBps, referralCode) {
-        this._assertInteger('poolId', poolId, 1);
+        this._assertInteger('poolId', poolId, 0);
         this._assertPositiveBigInt('coverageAmount', coverageAmount);
         this._assertInteger('durationWeeks', durationWeeks, 1);
         if (!this.signer)
@@ -768,9 +885,6 @@ export class LayerCoverSDK {
             throw new Error('IntentMatcher not configured');
         await this._assertConfiguredChain();
         const normalizedReferralCode = this._normalizeReferralCode(referralCode);
-        const signerAddress = await this.signer.getAddress();
-        const intentMatcherAddress = await this.intentOrderBook.getAddress();
-        const now = Math.floor(Date.now() / 1000);
         // 1. Fetch available quotes
         const quotes = await this.getFixedRateQuotes(poolId);
         if (quotes.length === 0) {
@@ -782,13 +896,22 @@ export class LayerCoverSDK {
             throw new RateTooHighError(`Best available rate ${bestQuote.premiumRateBps} bps exceeds max ${maxRateBps} bps`, bestQuote.premiumRateBps, maxRateBps);
         }
         const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
-        // 2. Refresh quote to get fresh coverageIntent + signature
-        const refreshUrl = `${this._apiBaseUrl}/api/quotes`;
-        const refreshResponse = await this._fetchApi(refreshUrl, {
+        return this._executeQuotePurchase(bestQuote, coverageAmount, durationSeconds, normalizedReferralCode);
+    }
+    async _executeQuotePurchase(quote, coverageAmount, durationSeconds, normalizedReferralCode) {
+        if (!this.signer)
+            throw new Error('Signer required for purchase');
+        if (!this.intentOrderBook)
+            throw new Error('IntentMatcher not configured');
+        const signerAddress = await this.signer.getAddress();
+        const intentMatcherAddress = await this.intentOrderBook.getAddress();
+        const now = Math.floor(Date.now() / 1000);
+        // 1. Refresh quote to get a fresh signed CoverageIntent from the backend.
+        const refreshResponse = await this._fetchApi(`${this._apiBaseUrl}/api/quotes`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                quoteId: bestQuote.id,
+                quoteId: quote.id,
                 amount: coverageAmount.toString(),
                 duration: durationSeconds,
                 chainId: this._chainId,
@@ -799,16 +922,16 @@ export class LayerCoverSDK {
             throw new Error(errorData.error || `Failed to refresh quote: ${refreshResponse.status}`);
         }
         const refreshData = await refreshResponse.json();
-        const coverageIntent = refreshData.coverageIntent || refreshData.reserveIntent;
-        const intentSignature = refreshData.intentSignature || refreshData.signature;
-        if (!coverageIntent || !intentSignature) {
-            throw new Error('Quote refresh failed: missing coverageIntent or signature');
+        const intentSignature = refreshData.intentSignature;
+        if (!intentSignature) {
+            throw new Error('Quote refresh failed: missing intent signature');
         }
-        // 3. Calculate premium with 5% buffer (uses module-level SECS_YEAR / BPS)
-        const premium = this.calculatePremium(coverageAmount, bestQuote.premiumRateBps, durationSeconds);
+        const sellerIntent = this._coerceCoverageIntent(refreshData.coverageIntent);
+        // 2. Calculate premium with 5% buffer (uses module-level SECS_YEAR / BPS)
+        const premium = this.calculatePremium(coverageAmount, quote.premiumRateBps, durationSeconds);
         const premiumWithBuffer = (premium * 105n) / 100n;
-        // 4. Approve IntentMatcher to spend premium
-        const paymentToken = await this.getPaymentToken(poolId);
+        // 3. Approve IntentMatcher to spend premium (ERC20 transferFrom path).
+        const paymentToken = await this.getPaymentToken(quote.poolId);
         const tokenContract = new Contract(paymentToken, [
             'function approve(address spender, uint256 amount) returns (bool)',
             'function allowance(address owner, address spender) view returns (uint256)',
@@ -820,85 +943,59 @@ export class LayerCoverSDK {
             await this._waitForTx(approveTx);
             this._log.debug('[LayerCover SDK] Approval confirmed');
         }
-        // 5. Build buyer order
+        // 4. Build and sign buy order (matches latest CoverageBuyOrder struct).
         const buyerOrder = {
             taker: signerAddress,
-            poolId: poolId,
-            coverageAmount: coverageAmount,
-            maxPremiumRateBps: Math.round(bestQuote.premiumRateBps * 1.05), // 5% slippage
+            poolId: quote.poolId,
+            coverageAmount,
+            maxPremiumRateBps: Math.round(quote.premiumRateBps * 1.05), // 5% slippage
             duration: durationSeconds,
             premiumDeposit: premiumWithBuffer,
             nonce: LayerCoverSDK._randomUint(12),
             expiry: now + 3600, // 1 hour
             salt: LayerCoverSDK._randomUint(32),
             referralCode: normalizedReferralCode,
+            vault: ethers.ZeroAddress,
+            sharesToCover: 0n,
         };
-        // 6. EIP-712 sign the buy order
         const domain = {
             name: 'IntentMatcher',
             version: '1',
             chainId: this._chainId,
             verifyingContract: intentMatcherAddress,
         };
-        const buyOrderTypes = {
-            CoverageBuyOrder: [
-                { name: 'taker', type: 'address' },
-                { name: 'poolId', type: 'uint256' },
-                { name: 'coverageAmount', type: 'uint256' },
-                { name: 'maxPremiumRateBps', type: 'uint256' },
-                { name: 'duration', type: 'uint256' },
-                { name: 'premiumDeposit', type: 'uint256' },
-                { name: 'nonce', type: 'uint256' },
-                { name: 'expiry', type: 'uint256' },
-                { name: 'salt', type: 'uint256' },
-                { name: 'referralCode', type: 'bytes32' },
-            ],
-        };
         this._log.debug('[LayerCover SDK] Signing buy order (EIP-712)…');
-        const orderSignature = await this.signer.signTypedData(domain, buyOrderTypes, buyerOrder);
-        // 7. Build seller intent struct from coverageIntent
-        const sellerIntent = {
-            maker: coverageIntent.maker,
-            poolId: coverageIntent.poolId,
-            coverageAmount: BigInt(coverageIntent.coverageAmount),
-            premiumRateBps: coverageIntent.premiumRateBps,
-            minDuration: coverageIntent.minDuration,
-            maxDuration: coverageIntent.maxDuration,
-            nonce: BigInt(coverageIntent.nonce),
-            expiry: coverageIntent.expiry,
-            salt: BigInt(coverageIntent.salt),
-            requiresUpfront: coverageIntent.requiresUpfront ?? true,
-            cancellationPenaltyBps: coverageIntent.cancellationPenaltyBps ?? 0,
-            minFillAmount: BigInt(coverageIntent.minFillAmount ?? '0'),
-            whitelistedBuyer: coverageIntent.whitelistedBuyer || ethers.ZeroAddress,
-        };
-        // 8. Call executeMatchedIntent on IntentMatcher
-        const EXECUTE_MATCHED_INTENT_ABI = [
-            'function executeMatchedIntent(tuple(address maker, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 minDuration, uint256 maxDuration, uint256 nonce, uint256 expiry, uint256 salt, bool requiresUpfront, uint16 cancellationPenaltyBps, uint256 minFillAmount, address whitelistedBuyer)[] intents, bytes[] intentSignatures, tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode) order, bytes orderSignature, uint256[] fillAmounts, address vault, uint256 sharesToCover) returns (uint256[])',
-        ];
-        const intentMatcher = new Contract(intentMatcherAddress, EXECUTE_MATCHED_INTENT_ABI, this.signer);
+        const orderSignature = await this.signer.signTypedData(domain, LayerCoverSDK.COVERAGE_BUY_ORDER_TYPES, buyerOrder);
+        // 5. Execute matched intent (Permit2 params intentionally empty for approval/transferFrom path).
+        const intentMatcher = new Contract(intentMatcherAddress, LayerCoverSDK.EXECUTE_MATCHED_INTENT_ABI, this.signer);
         this._log.debug('[LayerCover SDK] Executing purchase…');
-        const tx = await intentMatcher.executeMatchedIntent([sellerIntent], // intents[]
-        [intentSignature], // intentSignatures[]
-        buyerOrder, // order
-        orderSignature, // orderSignature (EIP-712 signed)
-        [coverageAmount], // fillAmounts[]
-        ethers.ZeroAddress, // vault (not used for standard coverage)
-        0 // sharesToCover
+        const tx = await intentMatcher.executeMatchedIntent([sellerIntent], [intentSignature], buyerOrder, orderSignature, [coverageAmount], ethers.ZeroAddress, // vault
+        0, // sharesToCover
+        0, // permit2Nonce
+        0, // permit2Deadline
+        '0x' // permit2Signature
         );
         const receipt = await this._waitForTx(tx);
         this._log.debug('[LayerCover SDK] Purchase confirmed:', tx.hash);
-        // 9. Extract policy ID from PolicyCreated event
+        // 6. Extract policyId from emitted events.
         const policyCreatedIface = new ethers.Interface([
             'event PolicyCreated(uint256 indexed policyId, address indexed holder, uint256 poolId)',
-            'event IntentMatched(uint256 indexed policyId, address indexed buyer, address indexed seller)',
+            'event IntentPolicyCreated(uint256 indexed policyId, address indexed buyer, address indexed underwriter, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 duration, bytes32 reservationKey)',
+            'event IntentMatched(address indexed underwriter, address indexed buyer, uint256 indexed poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 duration, uint256 policyId)',
         ]);
         let policyId;
+        let policyLogIndex;
         for (const log of receipt.logs) {
             try {
                 const parsed = policyCreatedIface.parseLog(log);
-                if (parsed && (parsed.name === 'PolicyCreated' || parsed.name === 'IntentMatched')) {
+                if (!parsed)
+                    continue;
+                if (parsed.name === 'PolicyCreated' || parsed.name === 'IntentPolicyCreated' || parsed.name === 'IntentMatched') {
                     policyId = parsed.args.policyId.toString();
+                    const maybeIndex = log.index;
+                    if (typeof maybeIndex === 'number' && Number.isInteger(maybeIndex) && maybeIndex >= 0) {
+                        policyLogIndex = maybeIndex;
+                    }
                     break;
                 }
             }
@@ -906,20 +1003,102 @@ export class LayerCoverSDK {
                 continue;
             }
         }
-        // Mark quote as filled
-        try {
-            await this._fetchApi(`${this._apiBaseUrl}/api/quotes`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    updates: [{ quoteId: bestQuote.id, filledAmount: coverageAmount.toString() }]
-                }),
-            });
-        }
-        catch {
-            // Non-critical
-        }
+        await this._syncFilledQuote(quote.id, tx.hash, coverageAmount, policyId, policyLogIndex);
         return { txHash: tx.hash, policyId };
+    }
+    _coerceCoverageIntent(raw) {
+        if (!raw || typeof raw !== 'object') {
+            throw new Error('Quote refresh failed: missing coverageIntent');
+        }
+        const maker = raw.maker;
+        const poolId = Number(raw.poolId);
+        const coverageAmount = BigInt(raw.coverageAmount);
+        const premiumRateBps = Number(raw.premiumRateBps);
+        const minDuration = Number(raw.minDuration);
+        const maxDuration = Number(raw.maxDuration);
+        const nonce = BigInt(raw.nonce);
+        const expiry = Number(raw.expiry);
+        const salt = BigInt(raw.salt);
+        const requiresUpfront = raw.requiresUpfront ?? true;
+        const cancellationPenaltyBps = Number(raw.cancellationPenaltyBps ?? 0);
+        const minFillAmount = BigInt(raw.minFillAmount ?? 0);
+        const whitelistedBuyer = raw.whitelistedBuyer || ethers.ZeroAddress;
+        if (!maker || !ethers.isAddress(maker)) {
+            throw new Error('Quote refresh returned incompatible intent: missing maker');
+        }
+        if (!Number.isInteger(poolId) || poolId < 0) {
+            throw new Error('Quote refresh returned incompatible intent: invalid poolId');
+        }
+        if (!Number.isInteger(premiumRateBps) || premiumRateBps <= 0) {
+            throw new Error('Quote refresh returned incompatible intent: invalid premiumRateBps');
+        }
+        if (!Number.isInteger(minDuration) || minDuration <= 0 || !Number.isInteger(maxDuration) || maxDuration <= 0) {
+            throw new Error('Quote refresh returned incompatible intent: invalid duration bounds');
+        }
+        if (!Number.isInteger(expiry) || expiry <= 0) {
+            throw new Error('Quote refresh returned incompatible intent: invalid expiry');
+        }
+        return {
+            maker,
+            poolId,
+            coverageAmount,
+            premiumRateBps,
+            minDuration,
+            maxDuration,
+            nonce,
+            expiry,
+            salt,
+            requiresUpfront: Boolean(requiresUpfront),
+            cancellationPenaltyBps,
+            minFillAmount,
+            whitelistedBuyer,
+        };
+    }
+    async _syncFilledQuote(quoteId, txHashRaw, coverageAmount, policyId, policyLogIndex) {
+        const txHash = txHashRaw.toLowerCase();
+        const idempotencyKey = `sdk-purchase-confirm:${this._chainId}:${txHash}:${quoteId}`;
+        const syncPayload = {
+            quoteId,
+            txHash,
+            filledAmount: coverageAmount.toString(),
+            idempotencyKey,
+        };
+        if (policyId) {
+            syncPayload.policyId = policyId;
+        }
+        if (policyLogIndex !== undefined) {
+            syncPayload.logIndex = policyLogIndex;
+        }
+        const syncResponse = await this._fetchApi(`${this._apiBaseUrl}/api/purchase/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(syncPayload),
+        }, {
+            retryOnNonIdempotent: true,
+        });
+        if (!syncResponse.ok) {
+            const syncError = await syncResponse.json().catch(() => ({}));
+            throw new Error(syncError?.error
+                || syncResponse.statusText
+                || `purchase/sync HTTP ${syncResponse.status}`);
+        }
+    }
+    /**
+     * Create a Base64-encoded auth header for write endpoints.
+     * @internal
+     */
+    async _createAuthHeader(action, syndicateAddress) {
+        if (!this.signer) {
+            throw new Error('Signer required for authenticated endpoints');
+        }
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signature = await this.signer.signTypedData(LayerCoverSDK.ORDERBOOK_AUTH_DOMAIN, LayerCoverSDK.ORDERBOOK_AUTH_TYPES, { action, syndicateAddress, timestamp });
+        const payload = JSON.stringify({ action, syndicateAddress, timestamp, signature });
+        // Use btoa for browser + Buffer for Node
+        const encoded = typeof btoa === 'function'
+            ? btoa(payload)
+            : Buffer.from(payload).toString('base64');
+        return `Bearer ${encoded}`;
     }
     /**
      * Submit a new coverage quote to the orderbook.
@@ -951,7 +1130,7 @@ export class LayerCoverSDK {
             throw new Error('Signer required to submit quotes');
         }
         const { poolId, syndicateAddress, coverageAmount, premiumRateBps, minDurationWeeks, maxDurationWeeks, allowPartialFill = false, minFillAmount, expiryHours = 24, whitelistedBuyer = ethers.ZeroAddress, intentMatcherAddress, } = params;
-        this._assertInteger('poolId', poolId, 1);
+        this._assertInteger('poolId', poolId, 0);
         this._assertPositiveBigInt('coverageAmount', coverageAmount);
         this._assertInteger('premiumRateBps', premiumRateBps, 1);
         this._assertInteger('minDurationWeeks', minDurationWeeks, 1);
@@ -961,7 +1140,7 @@ export class LayerCoverSDK {
         const network = await this.provider.getNetwork();
         const chainId = Number(network.chainId);
         if (chainId !== this._chainId) {
-            throw new Error(`Chain mismatch: SDK configured for ${this._chainId}, signer connected to ${chainId}`);
+            throw this._createChainMismatchError(chainId);
         }
         // Calculate durations in seconds
         const minCoverageDuration = minDurationWeeks * 7 * 24 * 60 * 60;
@@ -1073,6 +1252,7 @@ export class LayerCoverSDK {
             intentSignature,
             createdAt: new Date().toISOString(),
         };
+        // Intent signature serves as auth (no separate header needed)
         const response = await this._fetchApi(`${this._apiBaseUrl}/api/quotes`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1106,10 +1286,16 @@ export class LayerCoverSDK {
     /**
      * Cancel an existing quote
      * @param quoteId The quote ID to cancel
+     * @param syndicateAddress The syndicate address that owns the quote (required for auth)
      */
-    async cancelQuote(quoteId) {
+    async cancelQuote(quoteId, syndicateAddress) {
+        const headers = {};
+        if (this.signer && syndicateAddress) {
+            headers['Authorization'] = await this._createAuthHeader('cancel_quote', syndicateAddress);
+        }
         const response = await this._fetchApi(`${this._apiBaseUrl}/api/quotes?quoteId=${encodeURIComponent(quoteId)}`, {
             method: 'DELETE',
+            headers,
         });
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -1168,9 +1354,8 @@ export class LayerCoverSDK {
      * @returns ERC-20 token address used for premium payments in this pool
      */
     async getPaymentToken(poolId) {
-        await this._ensureContracts();
-        const staticData = await this._poolRegistry.getPoolStaticData(poolId);
-        return staticData[0];
+        this._assertInteger('poolId', poolId, 0);
+        return this._getSettlementAssetAddress();
     }
     /**
      * Get full pool metadata including token info resolved from chain
@@ -1178,9 +1363,7 @@ export class LayerCoverSDK {
      */
     async getPoolMetadata(poolId) {
         await this._ensureContracts();
-        // Get token address from pool static data
-        const staticData = await this._poolRegistry.getPoolStaticData(poolId);
-        const tokenAddress = staticData[0];
+        const tokenAddress = await this._getCoveredTokenAddress(poolId);
         // Create token contract to read metadata
         const tokenContract = new Contract(tokenAddress, [
             'function symbol() view returns (string)',
@@ -1233,6 +1416,124 @@ export class LayerCoverSDK {
             'function approve(address spender, uint256 amount) external returns (bool)'
         ], this.signer || this.provider);
         return await token.approve.populateTransaction(orderBookAddress, amount);
+    }
+    // ========================================================================
+    // SYNDICATE VAULT OPERATIONS
+    // ========================================================================
+    /**
+     * Deposit assets into a Syndicate vault.
+     * Prefers guarded `depositWithMinShares` and falls back to legacy `deposit` when unavailable.
+     */
+    async depositToSyndicate(syndicateAddress, assets, options = {}) {
+        if (!this.signer)
+            throw new Error('Signer required for syndicate deposits');
+        this._assertPositiveBigInt('assets', assets);
+        await this._assertConfiguredChain();
+        const signerAddress = await this.signer.getAddress();
+        const receiver = options.receiver ?? signerAddress;
+        if (ethers.getAddress(receiver) !== ethers.getAddress(signerAddress)) {
+            throw new Error('receiver must equal signer address for syndicate deposits');
+        }
+        const syndicate = new Contract(syndicateAddress, [
+            'function previewDeposit(uint256 assets) view returns (uint256)',
+            'function deposit(uint256 assets, address receiver) returns (uint256)',
+            'function depositWithMinShares(uint256 assets, address receiver, uint256 minShares, uint256 deadline) returns (uint256)',
+        ], this.signer);
+        const minShares = options.minShares ?? await this._deriveMinSharesFromPreview(syndicate, assets, options.slippageBps ?? DEFAULT_GUARDED_DEPOSIT_SLIPPAGE_BPS);
+        const deadline = this._resolveDeadline(options.deadline, options.deadlineSeconds);
+        try {
+            return await syndicate.depositWithMinShares(assets, receiver, minShares, deadline);
+        }
+        catch (error) {
+            if (LayerCoverSDK._isMethodUnavailableError(error)) {
+                return await syndicate.deposit(assets, receiver);
+            }
+            throw error;
+        }
+    }
+    /**
+     * Mint Syndicate shares.
+     * Prefers guarded `mintWithMaxAssets` and falls back to legacy `mint` when unavailable.
+     */
+    async mintSyndicateShares(syndicateAddress, shares, options = {}) {
+        if (!this.signer)
+            throw new Error('Signer required for syndicate mints');
+        this._assertPositiveBigInt('shares', shares);
+        await this._assertConfiguredChain();
+        const signerAddress = await this.signer.getAddress();
+        const receiver = options.receiver ?? signerAddress;
+        if (ethers.getAddress(receiver) !== ethers.getAddress(signerAddress)) {
+            throw new Error('receiver must equal signer address for syndicate mints');
+        }
+        const syndicate = new Contract(syndicateAddress, [
+            'function previewMint(uint256 shares) view returns (uint256)',
+            'function mint(uint256 shares, address receiver) returns (uint256)',
+            'function mintWithMaxAssets(uint256 shares, address receiver, uint256 maxAssets, uint256 deadline) returns (uint256)',
+        ], this.signer);
+        const maxAssets = options.maxAssets ?? await this._deriveMaxAssetsFromPreview(syndicate, shares, options.slippageBps ?? DEFAULT_GUARDED_MINT_SLIPPAGE_BPS);
+        const deadline = this._resolveDeadline(options.deadline, options.deadlineSeconds);
+        try {
+            return await syndicate.mintWithMaxAssets(shares, receiver, maxAssets, deadline);
+        }
+        catch (error) {
+            if (LayerCoverSDK._isMethodUnavailableError(error)) {
+                return await syndicate.mint(shares, receiver);
+            }
+            throw error;
+        }
+    }
+    /**
+     * Harvest yield from a Syndicate vault.
+     * Prefers guarded `harvestYieldWithDeadline` and falls back to legacy `harvestYield` when unavailable.
+     */
+    async harvestSyndicateYield(syndicateAddress, minAmount = 0n, options = {}) {
+        if (!this.signer)
+            throw new Error('Signer required for syndicate harvest');
+        if (typeof minAmount !== 'bigint' || minAmount < 0n) {
+            throw new Error('minAmount must be a bigint >= 0');
+        }
+        await this._assertConfiguredChain();
+        const syndicate = new Contract(syndicateAddress, [
+            'function harvestYield(uint256 minAmount) returns (uint256)',
+            'function harvestYieldWithDeadline(uint256 minAmount, uint256 deadline) returns (uint256)',
+        ], this.signer);
+        const deadline = this._resolveDeadline(options.deadline, options.deadlineSeconds);
+        try {
+            return await syndicate.harvestYieldWithDeadline(minAmount, deadline);
+        }
+        catch (error) {
+            if (LayerCoverSDK._isMethodUnavailableError(error)) {
+                return await syndicate.harvestYield(minAmount);
+            }
+            throw error;
+        }
+    }
+    /**
+     * Run Syndicate upkeep.
+     * Prefers guarded `upkeepWithMinHarvest` and falls back to legacy `upkeep` when unavailable.
+     */
+    async runSyndicateUpkeep(syndicateAddress, options = {}) {
+        if (!this.signer)
+            throw new Error('Signer required for syndicate upkeep');
+        await this._assertConfiguredChain();
+        const minHarvestAmount = options.minHarvestAmount ?? 0n;
+        if (typeof minHarvestAmount !== 'bigint' || minHarvestAmount < 0n) {
+            throw new Error('minHarvestAmount must be a bigint >= 0');
+        }
+        const syndicate = new Contract(syndicateAddress, [
+            'function upkeep()',
+            'function upkeepWithMinHarvest(uint256 minHarvestAmount, uint256 deadline)',
+        ], this.signer);
+        const deadline = this._resolveDeadline(options.deadline, options.deadlineSeconds);
+        try {
+            return await syndicate.upkeepWithMinHarvest(minHarvestAmount, deadline);
+        }
+        catch (error) {
+            if (LayerCoverSDK._isMethodUnavailableError(error)) {
+                return await syndicate.upkeep();
+            }
+            throw error;
+        }
     }
     // ========================================================================
     // DEPRECATED METHODS
@@ -1378,6 +1679,68 @@ export class LayerCoverSDK {
             throw new Error(`${name} must be > 0`);
         }
     }
+    _normalizeBps(bps, fallback) {
+        const raw = bps == null ? fallback : Math.floor(bps);
+        const clamped = !Number.isFinite(raw)
+            ? fallback
+            : Math.max(0, Math.min(MAX_BPS, raw));
+        return BigInt(clamped);
+    }
+    _resolveDeadline(deadline, deadlineSeconds) {
+        if (deadline != null) {
+            this._assertInteger('deadline', deadline, 0);
+            return deadline;
+        }
+        if (deadlineSeconds != null) {
+            this._assertInteger('deadlineSeconds', deadlineSeconds, 1);
+        }
+        return Math.floor(Date.now() / 1000) + (deadlineSeconds ?? DEFAULT_GUARDED_DEADLINE_SECONDS);
+    }
+    async _deriveMinSharesFromPreview(syndicate, assets, slippageBps) {
+        const previewShares = await syndicate.previewDeposit(assets);
+        const slippage = this._normalizeBps(slippageBps, DEFAULT_GUARDED_DEPOSIT_SLIPPAGE_BPS);
+        return (previewShares * (BPS - slippage)) / BPS;
+    }
+    async _deriveMaxAssetsFromPreview(syndicate, shares, slippageBps) {
+        const previewAssets = await syndicate.previewMint(shares);
+        const slippage = this._normalizeBps(slippageBps, DEFAULT_GUARDED_MINT_SLIPPAGE_BPS);
+        return (previewAssets * (BPS + slippage)) / BPS;
+    }
+    static _hasRevertData(error) {
+        const err = error;
+        const candidates = [
+            err?.data,
+            err?.error?.data,
+            err?.error?.error?.data,
+        ];
+        return candidates.some((candidate) => typeof candidate === 'string' && candidate !== '0x');
+    }
+    static _isMethodUnavailableError(error) {
+        const err = error;
+        const message = [
+            err?.reason,
+            err?.message,
+            err?.shortMessage,
+            err?.error?.message,
+            err?.data?.message,
+        ]
+            .filter((value) => typeof value === 'string')
+            .join(' ')
+            .toLowerCase();
+        if (message.includes('is not a function')
+            || message.includes('no matching function')
+            || message.includes('no matching fragment')
+            || message.includes('unknown function')
+            || message.includes('function selector was not recognized')
+            || message.includes('method not found')
+            || message.includes('unsupported operation')) {
+            return true;
+        }
+        return (!LayerCoverSDK._hasRevertData(error)
+            && (message.includes('missing revert data')
+                || message.includes('cannot estimate gas')
+                || message.includes('execution reverted')));
+    }
     _normalizeReferralCode(referralCode) {
         if (!referralCode)
             return ethers.ZeroHash;
@@ -1390,36 +1753,116 @@ export class LayerCoverSDK {
         const network = await this.provider.getNetwork();
         const connectedChainId = Number(network.chainId);
         if (connectedChainId !== this._chainId) {
-            throw new Error(`Chain mismatch: SDK configured for ${this._chainId}, signer connected to ${connectedChainId}`);
+            throw this._createChainMismatchError(connectedChainId);
         }
+    }
+    _createChainMismatchError(connectedChainId) {
+        const deploymentSuffix = this._deployment ? ` (deployment ${this._deployment})` : '';
+        const error = new Error(`Chain mismatch: SDK configured for ${this._chainId}${deploymentSuffix}, signer connected to ${connectedChainId}`);
+        error.expectedChainId = this._chainId;
+        error.expectedDeployment = this._deployment;
+        return error;
     }
     async _ensureContracts() {
         if (this._poolRegistry)
             return;
-        // Only try to fetch address once
-        let engineAddr = ethers.ZeroAddress;
-        try {
-            engineAddr = await this.policyManager.rateEngine();
+        let regAddr = this._poolRegistryAddress || CONTRACT_ADDRESSES[this._chainId]?.poolRegistry || ethers.ZeroAddress;
+        if (regAddr === ethers.ZeroAddress) {
+            try {
+                regAddr = await this.policyManager.poolRegistry();
+            }
+            catch (error) {
+                this._log.warn('[LayerCover SDK] poolRegistry() unavailable:', error?.message || String(error));
+            }
         }
-        catch { }
-        const [regAddr, umAddr, rmAddr] = await Promise.all([
-            this.policyManager.poolRegistry(),
-            this.policyManager.underwriterManager(),
-            this.policyManager.riskManager()
-        ]);
-        // Updated ABI
+        if (regAddr === ethers.ZeroAddress) {
+            let registryAddr = ethers.ZeroAddress;
+            try {
+                registryAddr = await this.policyManager.REGISTRY();
+            }
+            catch (error) {
+                this._log.warn('[LayerCover SDK] REGISTRY() unavailable:', error?.message || String(error));
+            }
+            if (registryAddr !== ethers.ZeroAddress) {
+                const registry = new Contract(registryAddr, [
+                    'function getPoolRegistry() view returns (address)',
+                    'function getPoolAllocations() view returns (address)',
+                    'function getRiskManager() view returns (address)'
+                ], this.provider);
+                if (regAddr === ethers.ZeroAddress) {
+                    try {
+                        regAddr = await registry.getPoolRegistry();
+                    }
+                    catch (error) {
+                        this._log.warn('[LayerCover SDK] getPoolRegistry() unavailable:', error?.message || String(error));
+                    }
+                }
+            }
+        }
+        if (regAddr === ethers.ZeroAddress) {
+            throw new Error(`Failed to resolve PoolRegistry address for chain ${this._chainId}`);
+        }
         this._poolRegistry = new Contract(regAddr, [
-            'function getPoolStaticData(uint256 poolId) view returns (address token, uint256 sold, bool paused, address feeRecipient, uint16 claimFee, uint8 riskRating, bool useEscrow)',
-            'function getPoolRateModel(uint256 poolId) view returns (tuple(uint256 base, uint256 slope1, uint256 slope2, uint256 kink, uint256 minRateBps, uint256 maxRateBps, bool overrideEnabled, uint256 overrideRateBps))'
+            'function getPoolStaticData(uint256 poolId) view returns (address token, uint256 sold, bool paused, address feeRecipient, uint256 claimFee, uint8 riskRating, bool useEscrow, bool isYieldRewardPool, uint256 coverageCap, bool usesOptimisticOracle, bytes32 oracleQuestionCID)',
+            'function getPoolVaultCoverConfig(uint256 poolId) view returns (address protocolToken, bool usesVaultCover)',
+            'function getPoolCoverageCap(uint256 poolId) view returns (uint256)',
+            'function getPoolCoverageSold(uint256 poolId) view returns (uint256)',
+            'function getPoolFeeConfig(uint256 poolId) view returns (uint256 claimFeeBps, address feeRecipient)',
+            'function getPoolRiskRating(uint256 poolId) view returns (uint8)',
+            'function isPoolPaused(uint256 poolId) view returns (bool)',
+            'function isOptimisticPool(uint256 poolId) view returns (bool)',
+            'function getPoolOracleQuestionCID(uint256 poolId) view returns (bytes32)',
         ], this.provider);
-        this._underwriterManager = new Contract(umAddr, [
-            'function getPoolCapitalHeadroom(uint256 poolId) view returns (uint256 activeCapital, uint256 availableCoverage)'
-        ], this.provider);
-        if (engineAddr !== ethers.ZeroAddress) {
-            this._rateEngine = new Contract(engineAddr, [
-                'function previewRate(uint256 poolId, uint256 sold, uint256 availableCapital) view returns (uint256)'
-            ], this.provider);
+    }
+    async _getSettlementAssetAddress() {
+        if (this._settlementAssetAddress) {
+            return this._settlementAssetAddress;
         }
+        const capitalPoolAddress = await this.policyManager.capitalPool().catch((error) => {
+            throw new Error(`Failed to resolve CapitalPool address for chain ${this._chainId}: ${error?.message || String(error)}`);
+        });
+        if (!capitalPoolAddress || capitalPoolAddress === ethers.ZeroAddress) {
+            throw new Error(`Failed to resolve CapitalPool address for chain ${this._chainId}`);
+        }
+        const capitalPool = new Contract(capitalPoolAddress, [
+            'function asset() view returns (address)',
+        ], this.provider);
+        const settlementAssetAddress = await capitalPool.asset().catch((error) => {
+            throw new Error(`Failed to resolve underwriting asset for chain ${this._chainId}: ${error?.message || String(error)}`);
+        });
+        if (!settlementAssetAddress || settlementAssetAddress === ethers.ZeroAddress) {
+            throw new Error(`Failed to resolve underwriting asset for chain ${this._chainId}`);
+        }
+        this._settlementAssetAddress = settlementAssetAddress;
+        return settlementAssetAddress;
+    }
+    async _getCoveredTokenAddress(poolId) {
+        await this._ensureContracts();
+        const poolRegistry = this._poolRegistry;
+        if (typeof poolRegistry?.getPoolVaultCoverConfig === 'function') {
+            try {
+                const [protocolToken] = await poolRegistry.getPoolVaultCoverConfig(poolId);
+                if (protocolToken && protocolToken !== ethers.ZeroAddress) {
+                    return protocolToken;
+                }
+            }
+            catch (error) {
+                this._log.warn('[LayerCover SDK] getPoolVaultCoverConfig() unavailable:', error?.message || String(error));
+            }
+        }
+        if (typeof poolRegistry?.getPoolStaticData === 'function') {
+            try {
+                const staticData = await poolRegistry.getPoolStaticData(poolId);
+                const tokenAddress = staticData?.protocolTokenToCover || staticData?.token || staticData?.[0];
+                if (tokenAddress && tokenAddress !== ethers.ZeroAddress) {
+                    return tokenAddress;
+                }
+            }
+            catch (error) {
+                this._log.warn('[LayerCover SDK] getPoolStaticData() unavailable:', error?.message || String(error));
+            }
+        }
+        return this._getSettlementAssetAddress();
     }
     static _randomUint(bytes) {
         return ethers.toBigInt(ethers.randomBytes(bytes));
@@ -1472,7 +1915,7 @@ export class LayerCoverSDK {
      * ```
      */
     watchQuotes(poolId, callback, options = {}) {
-        this._assertInteger('poolId', poolId, 1);
+        this._assertInteger('poolId', poolId, 0);
         const interval = options.refreshIntervalMs ?? 30000;
         this._assertInteger('refreshIntervalMs', interval, 1000);
         const filterExpired = options.filterExpired ?? true;
@@ -1794,6 +2237,23 @@ LayerCoverSDK.COVERAGE_INTENT_DOMAIN = {
     version: '1',
 };
 /**
+ * EIP-712 domain for Orderbook Auth
+ */
+LayerCoverSDK.ORDERBOOK_AUTH_DOMAIN = {
+    name: 'LayerCoverOrderbook',
+    version: '1',
+};
+/**
+ * EIP-712 types for Orderbook Auth
+ */
+LayerCoverSDK.ORDERBOOK_AUTH_TYPES = {
+    OrderbookAuth: [
+        { name: 'action', type: 'string' },
+        { name: 'syndicateAddress', type: 'address' },
+        { name: 'timestamp', type: 'uint256' },
+    ],
+};
+/**
  * EIP-712 types for Coverage Intent
  */
 LayerCoverSDK.COVERAGE_INTENT_TYPES = {
@@ -1813,3 +2273,25 @@ LayerCoverSDK.COVERAGE_INTENT_TYPES = {
         { name: 'whitelistedBuyer', type: 'address' },
     ],
 };
+/**
+ * EIP-712 types for buyer orders (must match IIntentMatcher.CoverageBuyOrder).
+ */
+LayerCoverSDK.COVERAGE_BUY_ORDER_TYPES = {
+    CoverageBuyOrder: [
+        { name: 'taker', type: 'address' },
+        { name: 'poolId', type: 'uint256' },
+        { name: 'coverageAmount', type: 'uint256' },
+        { name: 'maxPremiumRateBps', type: 'uint256' },
+        { name: 'duration', type: 'uint256' },
+        { name: 'premiumDeposit', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'expiry', type: 'uint256' },
+        { name: 'salt', type: 'uint256' },
+        { name: 'referralCode', type: 'bytes32' },
+        { name: 'vault', type: 'address' },
+        { name: 'sharesToCover', type: 'uint256' },
+    ],
+};
+LayerCoverSDK.EXECUTE_MATCHED_INTENT_ABI = [
+    'function executeMatchedIntent(tuple(address maker, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 minDuration, uint256 maxDuration, uint256 nonce, uint256 expiry, uint256 salt, bool requiresUpfront, uint16 cancellationPenaltyBps, uint256 minFillAmount, address whitelistedBuyer)[] intents, bytes[] intentSignatures, tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode, address vault, uint256 sharesToCover) order, bytes orderSignature, uint256[] fillAmounts, address vault, uint256 sharesToCover, uint256 permit2Nonce, uint256 permit2Deadline, bytes permit2Signature) returns (uint256[])',
+];

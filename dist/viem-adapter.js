@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ViemAdapter = void 0;
-const ethers_1 = require("ethers");
+const ethers_1 = require("ethers-v6");
 /**
  * Adapter to use viem/wagmi clients with the LayerCover SDK.
  *

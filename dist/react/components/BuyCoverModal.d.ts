@@ -18,6 +18,8 @@ export interface BuyCoverModalProps {
     referralCode?: string;
     /** Optional API base URL for quotes (default: https://app.layercover.com) */
     apiBaseUrl?: string;
+    /** Optional deployment identifier (for example, `avalanche_fuji_usdc`) */
+    deployment?: string;
 }
 /**
  * Ready-to-use Buy Cover modal component.
@@ -35,5 +37,5 @@ export interface BuyCoverModalProps {
  * />
  * ```
  */
-export declare function BuyCoverModal({ open, onClose, signer, poolId, availableBalance, onSuccess, theme: themeOverrides, referralCode, apiBaseUrl, }: BuyCoverModalProps): import("react/jsx-runtime").JSX.Element;
+export declare function BuyCoverModal({ open, onClose, signer, poolId, availableBalance, onSuccess, theme: themeOverrides, referralCode, apiBaseUrl, deployment, }: BuyCoverModalProps): import("react/jsx-runtime").JSX.Element;
 //# sourceMappingURL=BuyCoverModal.d.ts.map

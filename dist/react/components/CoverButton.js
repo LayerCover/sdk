@@ -22,12 +22,12 @@ const BuyCoverModal_1 = require("./BuyCoverModal");
  * />
  * ```
  */
-function CoverButton({ signer, poolId, availableBalance = 0, onSuccess, theme, buttonText = 'Cover', disabled = false, buttonProps, referralCode, apiBaseUrl, }) {
+function CoverButton({ signer, poolId, availableBalance = 0, onSuccess, theme, buttonText = 'Cover', disabled = false, buttonProps, referralCode, apiBaseUrl, deployment, }) {
     const [isModalOpen, setIsModalOpen] = (0, react_1.useState)(false);
     const handleSuccess = () => {
         setIsModalOpen(false);
         onSuccess?.();
     };
-    return ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsx)(material_1.Button, { variant: "outlined", color: "success", disabled: disabled || !signer, onClick: () => setIsModalOpen(true), sx: { minWidth: '80px', ...buttonProps?.sx }, ...buttonProps, children: buttonText }), (0, jsx_runtime_1.jsx)(BuyCoverModal_1.BuyCoverModal, { open: isModalOpen, onClose: () => setIsModalOpen(false), signer: signer, poolId: poolId, availableBalance: availableBalance, onSuccess: handleSuccess, theme: theme, referralCode: referralCode, apiBaseUrl: apiBaseUrl })] }));
+    return ((0, jsx_runtime_1.jsxs)(jsx_runtime_1.Fragment, { children: [(0, jsx_runtime_1.jsx)(material_1.Button, { variant: "outlined", color: "success", disabled: disabled || !signer, onClick: () => setIsModalOpen(true), sx: { minWidth: '80px', ...buttonProps?.sx }, ...buttonProps, children: buttonText }), (0, jsx_runtime_1.jsx)(BuyCoverModal_1.BuyCoverModal, { open: isModalOpen, onClose: () => setIsModalOpen(false), signer: signer, poolId: poolId, availableBalance: availableBalance, onSuccess: handleSuccess, theme: theme, referralCode: referralCode, apiBaseUrl: apiBaseUrl, deployment: deployment })] }));
 }
 //# sourceMappingURL=CoverButton.js.map

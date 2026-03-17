@@ -19,11 +19,11 @@ import { BuyCoverModal } from './BuyCoverModal';
  * />
  * ```
  */
-export function CoverButton({ signer, poolId, availableBalance = 0, onSuccess, theme, buttonText = 'Cover', disabled = false, buttonProps, referralCode, apiBaseUrl, }) {
+export function CoverButton({ signer, poolId, availableBalance = 0, onSuccess, theme, buttonText = 'Cover', disabled = false, buttonProps, referralCode, apiBaseUrl, deployment, }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const handleSuccess = () => {
         setIsModalOpen(false);
         onSuccess?.();
     };
-    return (_jsxs(_Fragment, { children: [_jsx(Button, { variant: "outlined", color: "success", disabled: disabled || !signer, onClick: () => setIsModalOpen(true), sx: { minWidth: '80px', ...buttonProps?.sx }, ...buttonProps, children: buttonText }), _jsx(BuyCoverModal, { open: isModalOpen, onClose: () => setIsModalOpen(false), signer: signer, poolId: poolId, availableBalance: availableBalance, onSuccess: handleSuccess, theme: theme, referralCode: referralCode, apiBaseUrl: apiBaseUrl })] }));
+    return (_jsxs(_Fragment, { children: [_jsx(Button, { variant: "outlined", color: "success", disabled: disabled || !signer, onClick: () => setIsModalOpen(true), sx: { minWidth: '80px', ...buttonProps?.sx }, ...buttonProps, children: buttonText }), _jsx(BuyCoverModal, { open: isModalOpen, onClose: () => setIsModalOpen(false), signer: signer, poolId: poolId, availableBalance: availableBalance, onSuccess: handleSuccess, theme: theme, referralCode: referralCode, apiBaseUrl: apiBaseUrl, deployment: deployment })] }));
 }

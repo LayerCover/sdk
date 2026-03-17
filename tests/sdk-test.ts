@@ -12,7 +12,6 @@ import {
     RefreshedQuote,
     PurchaseResult,
     Quote,
-    RateModel,
     PoolMetadata,
     POOL_CONFIG,
     TOKEN_LOGOS,
@@ -113,7 +112,6 @@ async function main() {
         const refreshed: Partial<RefreshedQuote> = { signature: '0x' };
         const result: Partial<PurchaseResult> = { txHash: '0x' };
         const legacyQuote: Partial<Quote> = { poolId: 1 };
-        const rateModel: Partial<RateModel> = { base: 0n };
         const poolMeta: Partial<PoolMetadata> = { poolId: 1 };
         const opts: Partial<LayerCoverSDKOptions> = {};
         assert(true, 'all types exist');
@@ -524,6 +522,43 @@ async function main() {
         }
     });
 
+    await test('CoverageBuyOrder EIP-712 types match IIntentMatcher struct', () => {
+        // From IIntentMatcher.sol CoverageBuyOrder struct
+        const contractFields = [
+            { name: 'taker', type: 'address' },
+            { name: 'poolId', type: 'uint256' },
+            { name: 'coverageAmount', type: 'uint256' },
+            { name: 'maxPremiumRateBps', type: 'uint256' },
+            { name: 'duration', type: 'uint256' },
+            { name: 'premiumDeposit', type: 'uint256' },
+            { name: 'nonce', type: 'uint256' },
+            { name: 'expiry', type: 'uint256' },
+            { name: 'salt', type: 'uint256' },
+            { name: 'referralCode', type: 'bytes32' },
+            { name: 'vault', type: 'address' },
+            { name: 'sharesToCover', type: 'uint256' },
+        ];
+
+        const sdkTypes = (LayerCoverSDK as any).COVERAGE_BUY_ORDER_TYPES.CoverageBuyOrder;
+
+        assertEqual(sdkTypes.length, contractFields.length,
+            `CoverageBuyOrder field count (SDK=${sdkTypes.length} vs Contract=${contractFields.length})`);
+
+        for (let i = 0; i < contractFields.length; i++) {
+            assertEqual(sdkTypes[i].name, contractFields[i].name,
+                `CoverageBuyOrder field ${i} name`);
+            assertEqual(sdkTypes[i].type, contractFields[i].type,
+                `CoverageBuyOrder field ${i} type (${contractFields[i].name})`);
+        }
+    });
+
+    await test('executeMatchedIntent ABI selector matches latest contract signature', () => {
+        const abi = (LayerCoverSDK as any).EXECUTE_MATCHED_INTENT_ABI;
+        const iface = new ethers.Interface(abi);
+        const selector = iface.getFunction('executeMatchedIntent')?.selector;
+        assertEqual(selector, '0xd2d599e7', 'executeMatchedIntent selector');
+    });
+
     await test('ReserveIntent domain uses "Syndicate" v1', () => {
         const domain = (LayerCoverSDK as any).RESERVE_INTENT_DOMAIN;
         assertEqual(domain.name, 'Syndicate', 'domain name');
@@ -805,7 +840,7 @@ async function main() {
         assert(threw, 'should throw without signer');
     });
 
-    await test('prepareBuyFromQuoteTx requires IntentOrderBook', async () => {
+    await test('prepareBuyFromQuoteTx is deprecated on current contracts', async () => {
         const provider = new ethers.JsonRpcProvider('http://localhost:1234');
         const sdk = new LayerCoverSDK(provider, ethers.ZeroAddress, { chainId: 999999 });
 
@@ -814,9 +849,9 @@ async function main() {
             await sdk.prepareBuyFromQuoteTx(1, 1000n, 604800);
         } catch (err: any) {
             threw = true;
-            assert(err.message.includes('IntentOrderBook'), `error should mention IntentOrderBook: ${err.message}`);
+            assert(err.message.includes('deprecated'), `error should mention deprecation: ${err.message}`);
         }
-        assert(threw, 'should throw without IntentOrderBook');
+        assert(threw, 'should throw with deprecation error');
     });
 
     await test('submitQuote requires signer', async () => {

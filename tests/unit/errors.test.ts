@@ -53,6 +53,17 @@ describe('getHumanError', () => {
         expect(msg.length).toBeGreaterThan(0);
     });
 
+    it('uses the configured chain for wrong-network errors', () => {
+        const err = {
+            message: 'Chain mismatch: SDK configured for 43113 (deployment avalanche_fuji_usdc), signer connected to 1',
+            expectedChainId: 43113,
+            expectedDeployment: 'avalanche_fuji_usdc',
+        };
+        const msg = getHumanError(err);
+        expect(msg).toContain('Avalanche Fuji');
+        expect(msg).toContain('avalanche_fuji_usdc');
+    });
+
     it('returns generic message for unknown errors', () => {
         const err = { message: 'something completely unexpected happened xyz123' };
         const msg = getHumanError(err);

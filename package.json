@@ -49,7 +49,7 @@
         "url": "https://github.com/layercover/sdk/issues"
     },
     "dependencies": {
-        "ethers": "^6.15.0"
+        "ethers-v6": "npm:ethers@^6.15.0"
     },
     "peerDependencies": {
         "@emotion/react": "^11.0.0",

@@ -1,4 +1,4 @@
-import { BrowserProvider, JsonRpcProvider, JsonRpcSigner } from 'ethers';
+import { BrowserProvider, JsonRpcProvider, JsonRpcSigner } from 'ethers-v6';
 
 /**
  * Adapter to use viem/wagmi clients with the LayerCover SDK.

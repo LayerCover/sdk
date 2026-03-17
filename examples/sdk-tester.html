@@ -1165,18 +1165,20 @@
                     log('Waiting for confirmation...');
                     await new Promise(r => setTimeout(r, 5000));
 
-                    // 5. Confirm
-                    log('Step 5: Confirming purchase...');
-                    const confirmRes = await fetch(`${base}/api/purchase/confirm`, {
+                    // 5. Sync
+                    log('Step 5: Syncing purchase state...');
+                    const idempotencyKey = `purchase-sync:${bestQuote.id}:${purchaseHash.toLowerCase()}`;
+                    const syncRes = await fetch(`${base}/api/purchase/sync`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             quoteId: bestQuote.id,
                             txHash: purchaseHash,
                             filledAmount: coverageAmount.toString(),
+                            idempotencyKey,
                         }),
                     });
-                    const confirmData = await confirmRes.json();
+                    const confirmData = await syncRes.json();
 
                     document.getElementById('purchaseResult').innerHTML = resultPanel([
                         ['Status', '🎉 Purchase Complete', 'success'],

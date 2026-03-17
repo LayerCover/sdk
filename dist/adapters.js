@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.EthersV5Adapter = void 0;
-const ethers_1 = require("ethers");
+const ethers_1 = require("ethers-v6");
 /**
  * Helpers to adapt Ethers v5 objects to Ethers v6 for SDK compatibility.
  */

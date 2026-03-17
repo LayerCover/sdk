@@ -24,8 +24,8 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import { formatUnits, parseUnits } from 'ethers';
-import { LayerCoverSDK, FixedRateQuote, PoolMetadata, DEFAULT_CHAIN_ID } from '../../index';
+import { formatUnits, parseUnits } from 'ethers-v6';
+import { LayerCoverSDK, FixedRateQuote, PoolMetadata } from '../../index';
 import { LAYERCOVER_LOGO_DARK, LAYERCOVER_LOGO_LIGHT } from './logo';
 
 // Helper to detect if a color is light (for logo selection)
@@ -59,6 +59,8 @@ export interface BuyCoverModalProps {
     referralCode?: string;
     /** Optional API base URL for quotes (default: https://app.layercover.com) */
     apiBaseUrl?: string;
+    /** Optional deployment identifier (for example, `avalanche_fuji_usdc`) */
+    deployment?: string;
 }
 
 const WEEK_MARKS = [
@@ -129,6 +131,7 @@ export function BuyCoverModal({
     theme: themeOverrides,
     referralCode,
     apiBaseUrl,
+    deployment,
 }: BuyCoverModalProps) {
     // Merge custom theme with defaults
     const theme: BuyCoverTheme = useMemo(
@@ -174,18 +177,26 @@ export function BuyCoverModal({
 
     useEffect(() => {
         const initSdk = async () => {
-            if (!signer) return;
+            if (!open) return;
+            if (!signer) {
+                setSdk(null);
+                setChainError('Wallet not connected');
+                return;
+            }
             try {
-                const instance = await LayerCoverSDK.create(signer, { apiBaseUrl });
+                const instance = await LayerCoverSDK.create(signer, { apiBaseUrl, deployment });
                 setSdk(instance);
                 setChainError('');
             } catch (e: any) {
                 console.error('Failed to initialize SDK:', e);
-                setChainError(e.message || 'Unsupported network');
+                const message = e?.message || 'Unsupported network';
+                setSdk(null);
+                setChainError(message);
+                setError(message);
             }
         };
         initSdk();
-    }, [signer, apiBaseUrl]);
+    }, [open, signer, apiBaseUrl, deployment]);
 
     const [activeTab, setActiveTab] = useState(0);
     const [amount, setAmount] = useState('');
@@ -196,12 +207,13 @@ export function BuyCoverModal({
     const [error, setError] = useState('');
     const [txStatus, setTxStatus] = useState('');
     const [poolMetadata, setPoolMetadata] = useState<PoolMetadata | null>(null);
-    const [metadataLoading, setMetadataLoading] = useState(true);
+    const [metadataLoading, setMetadataLoading] = useState(false);
 
     // Derived values from pool metadata
     const tokenSymbol = poolMetadata?.tokenSymbol || '';
     const tokenDecimals = poolMetadata?.tokenDecimals || 6;
     const tokenLogoUrl = poolMetadata?.tokenLogoUrl;
+    const payoutTokenSymbol = poolMetadata?.payoutTokenSymbol || 'USDC';
     const payoutTokenLogoUrl = poolMetadata?.payoutTokenLogoUrl;
 
     const endDate = useMemo(() => {
@@ -217,13 +229,19 @@ export function BuyCoverModal({
             setBestQuote(null);
             setEstimatedPremium(null);
             setActiveTab(0);
+            setMetadataLoading(true);
         }
     }, [open]);
 
     // Fetch pool metadata when modal opens
     useEffect(() => {
         const fetchMetadata = async () => {
-            if (!open || !sdk) {
+            if (!open) {
+                setMetadataLoading(false);
+                return;
+            }
+            if (!sdk) {
+                if (chainError) setMetadataLoading(false);
                 return;
             }
             setMetadataLoading(true);
@@ -238,7 +256,7 @@ export function BuyCoverModal({
             }
         };
         fetchMetadata();
-    }, [open, sdk, poolId]);
+    }, [open, sdk, poolId, chainError]);
 
     // Auto-fetch quote when amount or weeks change
     useEffect(() => {
@@ -367,6 +385,8 @@ export function BuyCoverModal({
                         <Box display="flex" justifyContent="center" alignItems="center" py={8}>
                             <CircularProgress />
                         </Box>
+                    ) : chainError ? (
+                        <Alert severity="error">{chainError}</Alert>
                     ) : activeTab === 0 ? (
                         /* Purchase Tab */
                         <Box display="flex" flexDirection="column" gap={5}>
@@ -490,7 +510,8 @@ export function BuyCoverModal({
                                                     Estimated Cost ({weeks}w)
                                                 </Typography>
                                                 <Typography variant="body2" fontWeight="medium">
-                                                    {formatUnits(estimatedPremium, tokenDecimals)} {tokenSymbol}
+                                                    {formatUnits(estimatedPremium, tokenDecimals)}{' '}
+                                                    {payoutTokenSymbol}
                                                 </Typography>
                                             </Stack>
                                             <Stack direction="row" justifyContent="space-between" alignItems="center">
@@ -518,12 +539,12 @@ export function BuyCoverModal({
                                                     {payoutTokenLogoUrl && (
                                                         <img
                                                             src={payoutTokenLogoUrl}
-                                                            alt="USDC"
+                                                            alt={payoutTokenSymbol}
                                                             style={{ width: 16, height: 16, borderRadius: '50%' }}
                                                         />
                                                     )}
                                                     <Typography variant="body2" fontWeight="medium">
-                                                        USDC
+                                                        {payoutTokenSymbol}
                                                     </Typography>
                                                 </Stack>
                                             </Stack>

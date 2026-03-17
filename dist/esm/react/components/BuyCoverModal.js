@@ -1,11 +1,11 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState, useEffect, useMemo } from 'react';
 import { defaultTheme } from '../theme';
-import { Accordion, AccordionDetails, AccordionSummary, Box, Button, CircularProgress, Dialog, DialogContent, IconButton, InputAdornment, Slider, Stack, Tab, Tabs, TextField, Typography, createTheme as createMuiTheme, ThemeProvider, } from '@mui/material';
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, CircularProgress, Dialog, DialogContent, IconButton, InputAdornment, Slider, Stack, Tab, Tabs, TextField, Typography, createTheme as createMuiTheme, ThemeProvider, } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import { formatUnits, parseUnits } from 'ethers';
+import { formatUnits, parseUnits } from 'ethers-v6';
 import { LayerCoverSDK } from '../../index';
 import { LAYERCOVER_LOGO_DARK, LAYERCOVER_LOGO_LIGHT } from './logo';
 // Helper to detect if a color is light (for logo selection)
@@ -70,7 +70,7 @@ import { getHumanError as decodeError } from '../../errors';
  * />
  * ```
  */
-export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, onSuccess, theme: themeOverrides, referralCode, apiBaseUrl, }) {
+export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, onSuccess, theme: themeOverrides, referralCode, apiBaseUrl, deployment, }) {
     // Merge custom theme with defaults
     const theme = useMemo(() => ({ ...defaultTheme, ...themeOverrides }), [themeOverrides]);
     // Create MUI theme from our custom theme
@@ -105,20 +105,28 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
     const [chainError, setChainError] = useState('');
     useEffect(() => {
         const initSdk = async () => {
-            if (!signer)
+            if (!open)
                 return;
+            if (!signer) {
+                setSdk(null);
+                setChainError('Wallet not connected');
+                return;
+            }
             try {
-                const instance = await LayerCoverSDK.create(signer, { apiBaseUrl });
+                const instance = await LayerCoverSDK.create(signer, { apiBaseUrl, deployment });
                 setSdk(instance);
                 setChainError('');
             }
             catch (e) {
                 console.error('Failed to initialize SDK:', e);
-                setChainError(e.message || 'Unsupported network');
+                const message = e?.message || 'Unsupported network';
+                setSdk(null);
+                setChainError(message);
+                setError(message);
             }
         };
         initSdk();
-    }, [signer, apiBaseUrl]);
+    }, [open, signer, apiBaseUrl, deployment]);
     const [activeTab, setActiveTab] = useState(0);
     const [amount, setAmount] = useState('');
     const [weeks, setWeeks] = useState(4);
@@ -128,11 +136,12 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
     const [error, setError] = useState('');
     const [txStatus, setTxStatus] = useState('');
     const [poolMetadata, setPoolMetadata] = useState(null);
-    const [metadataLoading, setMetadataLoading] = useState(true);
+    const [metadataLoading, setMetadataLoading] = useState(false);
     // Derived values from pool metadata
     const tokenSymbol = poolMetadata?.tokenSymbol || '';
     const tokenDecimals = poolMetadata?.tokenDecimals || 6;
     const tokenLogoUrl = poolMetadata?.tokenLogoUrl;
+    const payoutTokenSymbol = poolMetadata?.payoutTokenSymbol || 'USDC';
     const payoutTokenLogoUrl = poolMetadata?.payoutTokenLogoUrl;
     const endDate = useMemo(() => {
         const date = new Date();
@@ -146,12 +155,19 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
             setBestQuote(null);
             setEstimatedPremium(null);
             setActiveTab(0);
+            setMetadataLoading(true);
         }
     }, [open]);
     // Fetch pool metadata when modal opens
     useEffect(() => {
         const fetchMetadata = async () => {
-            if (!open || !sdk) {
+            if (!open) {
+                setMetadataLoading(false);
+                return;
+            }
+            if (!sdk) {
+                if (chainError)
+                    setMetadataLoading(false);
                 return;
             }
             setMetadataLoading(true);
@@ -168,7 +184,7 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
             }
         };
         fetchMetadata();
-    }, [open, sdk, poolId]);
+    }, [open, sdk, poolId, chainError]);
     // Auto-fetch quote when amount or weeks change
     useEffect(() => {
         const fetchQuote = async () => {
@@ -254,7 +270,7 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
                                     },
                                 }, children: [_jsx(Tab, { label: "Purchase" }), _jsx(Tab, { label: "How it works" })] }), _jsx(IconButton, { onClick: onClose, size: "small", sx: { color: 'grey.500' }, children: _jsx(CloseIcon, {}) })] }) }), _jsx(DialogContent, { children: metadataLoading ? (
                     /* Loading state */
-                    _jsx(Box, { display: "flex", justifyContent: "center", alignItems: "center", py: 8, children: _jsx(CircularProgress, {}) })) : activeTab === 0 ? (
+                    _jsx(Box, { display: "flex", justifyContent: "center", alignItems: "center", py: 8, children: _jsx(CircularProgress, {}) })) : chainError ? (_jsx(Alert, { severity: "error", children: chainError })) : activeTab === 0 ? (
                     /* Purchase Tab */
                     _jsxs(Box, { display: "flex", flexDirection: "column", gap: 5, children: [_jsxs(Box, { children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", mb: 1, children: [_jsx(Typography, { variant: "body2", fontWeight: "medium", children: "Amount" }), _jsxs(Typography, { variant: "caption", color: "text.secondary", children: ["Enter the amount of ", tokenSymbol ? `${tokenSymbol} ` : '', "cover"] })] }), _jsx(TextField, { value: amount, onChange: (e) => setAmount(e.target.value), type: "text", inputProps: {
                                             inputMode: 'decimal',
@@ -276,7 +292,7 @@ export function BuyCoverModal({ open, onClose, signer, poolId, availableBalance 
                                             backgroundColor: theme.inputBackgroundColor,
                                             borderRadius: theme.inputBorderRadius / 4,
                                             p: 2,
-                                        }, children: _jsxs(Stack, { spacing: 2, children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "Premium Rate" }), _jsxs(Typography, { variant: "body2", fontWeight: "medium", children: [(bestQuote.premiumRateBps / 100).toFixed(2), "% APY"] })] }), _jsxs(Stack, { direction: "row", justifyContent: "space-between", children: [_jsxs(Typography, { variant: "body2", color: "text.secondary", children: ["Estimated Cost (", weeks, "w)"] }), _jsxs(Typography, { variant: "body2", fontWeight: "medium", children: [formatUnits(estimatedPremium, tokenDecimals), " ", tokenSymbol] })] }), _jsxs(Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "Coverage Amount" }), _jsxs(Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [tokenLogoUrl && (_jsx("img", { src: tokenLogoUrl, alt: tokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), _jsxs(Typography, { variant: "body2", fontWeight: "medium", children: [amount, " ", tokenSymbol] })] })] }), _jsxs(Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "Payout Token" }), _jsxs(Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [payoutTokenLogoUrl && (_jsx("img", { src: payoutTokenLogoUrl, alt: "USDC", style: { width: 16, height: 16, borderRadius: '50%' } })), _jsx(Typography, { variant: "body2", fontWeight: "medium", children: "USDC" })] })] })] }) })] })), error && (_jsx(Typography, { color: "error", variant: "caption", children: error })), txStatus && (_jsx(Typography, { color: "primary", variant: "caption", children: txStatus })), _jsx(Button, { variant: "contained", size: "large", fullWidth: true, onClick: handlePurchase, disabled: loading || !bestQuote || !amount, sx: {
+                                        }, children: _jsxs(Stack, { spacing: 2, children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "Premium Rate" }), _jsxs(Typography, { variant: "body2", fontWeight: "medium", children: [(bestQuote.premiumRateBps / 100).toFixed(2), "% APY"] })] }), _jsxs(Stack, { direction: "row", justifyContent: "space-between", children: [_jsxs(Typography, { variant: "body2", color: "text.secondary", children: ["Estimated Cost (", weeks, "w)"] }), _jsxs(Typography, { variant: "body2", fontWeight: "medium", children: [formatUnits(estimatedPremium, tokenDecimals), ' ', payoutTokenSymbol] })] }), _jsxs(Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "Coverage Amount" }), _jsxs(Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [tokenLogoUrl && (_jsx("img", { src: tokenLogoUrl, alt: tokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), _jsxs(Typography, { variant: "body2", fontWeight: "medium", children: [amount, " ", tokenSymbol] })] })] }), _jsxs(Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "Payout Token" }), _jsxs(Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [payoutTokenLogoUrl && (_jsx("img", { src: payoutTokenLogoUrl, alt: payoutTokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), _jsx(Typography, { variant: "body2", fontWeight: "medium", children: payoutTokenSymbol })] })] })] }) })] })), error && (_jsx(Typography, { color: "error", variant: "caption", children: error })), txStatus && (_jsx(Typography, { color: "primary", variant: "caption", children: txStatus })), _jsx(Button, { variant: "contained", size: "large", fullWidth: true, onClick: handlePurchase, disabled: loading || !bestQuote || !amount, sx: {
                                     py: 1.5,
                                     borderRadius: theme.inputBorderRadius / 4,
                                     background: bestQuote

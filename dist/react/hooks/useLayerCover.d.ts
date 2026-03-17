@@ -1,5 +1,5 @@
 import { LayerCoverSDK, FixedRateQuote, PurchaseResult, CoveragePool } from '../../index';
-import type { Signer, Provider } from 'ethers';
+import type { Signer, Provider } from 'ethers-v6';
 export interface UseLayerCoverOptions {
     /** Ethers v6 signer (for purchases) or provider (for read-only) */
     signer?: Signer | Provider;

@@ -1,4 +1,4 @@
-import { ethers, Contract, Signer, Provider } from 'ethers';
+import { ethers, Contract, Signer, Provider } from 'ethers-v6';
 export * from './adapters';
 export * from './viem-adapter';
 export { ERROR_MESSAGES, getHumanError } from './errors';
@@ -101,6 +101,40 @@ export interface PurchaseResult {
     txHash: string;
     policyId?: string;
 }
+export interface SyndicateDepositOptions {
+    /** Defaults to signer address. Must equal signer for current Syndicate auth model. */
+    receiver?: string;
+    /** Optional explicit min shares bound. If omitted, SDK derives it from previewDeposit and slippageBps. */
+    minShares?: bigint;
+    /** Slippage tolerance in bps when deriving minShares. Default: 50 (0.5%). */
+    slippageBps?: number;
+    /** Absolute unix timestamp deadline override. */
+    deadline?: number;
+    /** Relative deadline in seconds from now when `deadline` is not provided. Default: 900s. */
+    deadlineSeconds?: number;
+}
+export interface SyndicateMintOptions {
+    /** Defaults to signer address. Must equal signer for current Syndicate auth model. */
+    receiver?: string;
+    /** Optional explicit max assets bound. If omitted, SDK derives it from previewMint and slippageBps. */
+    maxAssets?: bigint;
+    /** Slippage tolerance in bps when deriving maxAssets. Default: 50 (0.5%). */
+    slippageBps?: number;
+    /** Absolute unix timestamp deadline override. */
+    deadline?: number;
+    /** Relative deadline in seconds from now when `deadline` is not provided. Default: 900s. */
+    deadlineSeconds?: number;
+}
+export interface SyndicateDeadlineOptions {
+    /** Absolute unix timestamp deadline override. */
+    deadline?: number;
+    /** Relative deadline in seconds from now when `deadline` is not provided. Default: 900s. */
+    deadlineSeconds?: number;
+}
+export interface SyndicateUpkeepOptions extends SyndicateDeadlineOptions {
+    /** Minimum required harvested amount when using guarded upkeep path. */
+    minHarvestAmount?: bigint;
+}
 /**
  * @deprecated Use FixedRateQuote instead
  */
@@ -112,28 +146,6 @@ export interface Quote {
     premium: bigint;
     minDeposit: bigint;
     capacity: bigint;
-}
-/**
- * On-chain rate model parameters for a coverage pool.
- * Uses a two-slope (kink) model similar to Aave/Compound interest rate curves.
- */
-export interface RateModel {
-    /** Base rate (before utilization adjustment) */
-    base: bigint;
-    /** Slope before the kink point */
-    slope1: bigint;
-    /** Slope after the kink point (steeper) */
-    slope2: bigint;
-    /** Utilization threshold where slope changes */
-    kink: bigint;
-    /** Floor rate in basis points */
-    minRateBps: bigint;
-    /** Ceiling rate in basis points */
-    maxRateBps: bigint;
-    /** Whether the rate model override is active */
-    overrideEnabled: boolean;
-    /** Override rate in basis points (used when `overrideEnabled` is true) */
-    overrideRateBps: bigint;
 }
 export interface PoolMetadata {
     poolId: number;
@@ -263,14 +275,24 @@ export declare const TOKEN_LOGOS: Record<string, string>;
  */
 export declare function getTokenLogoUrl(symbol: string): string;
 /**
- * Contract addresses for LayerCover deployments
- * Key is chainId
+ * Legacy chain-level fallback addresses.
+ * Prefer deployment-aware config via `/api/config` when available.
  */
 export declare const CONTRACT_ADDRESSES: Record<number, {
     policyManager: string;
     intentOrderBook: string;
+    poolRegistry?: string;
     capitalPool?: string;
 }>;
+type FallbackDeploymentConfig = {
+    chainId: number;
+    contracts: {
+        policyManager: string;
+        intentOrderBook: string;
+        poolRegistry?: string;
+    };
+};
+export declare const DEPLOYMENT_FALLBACK_CONFIGS: Record<string, FallbackDeploymentConfig>;
 /**
  * Get the PolicyManager address for a given chain
  * @param chainId The chain ID
@@ -312,6 +334,8 @@ export interface LayerCoverSDKOptions {
     intentOrderBookAddress?: string;
     /** PolicyNFT contract address (auto-resolved from on-chain if not provided) */
     policyNFTAddress?: string;
+    /** PoolRegistry contract address (optional explicit override) */
+    poolRegistryAddress?: string;
     /** API base URL for fetching quotes (default: https://app.layercover.com) */
     apiBaseUrl?: string;
     /** Deployment identifier (e.g., 'base_sepolia_usdc') */
@@ -378,6 +402,8 @@ export declare class LayerCoverSDK {
     private _rateEngine?;
     private _policyNFT?;
     private _policyNFTAddress?;
+    private _poolRegistryAddress?;
+    private _settlementAssetAddress?;
     constructor(providerOrSigner: Provider | Signer, policyManagerAddress: string, options?: LayerCoverSDKOptions);
     /**
      * Configuration fetched from the API
@@ -387,12 +413,16 @@ export declare class LayerCoverSDK {
             policyManager: string;
             intentOrderBook: string;
             intentMatcher?: string;
+            poolRegistry?: string;
         };
         chainId: number;
         apiBaseUrl: string;
         deployment?: string;
         fetchedAt: number;
     } | null;
+    private static _getDefaultDeploymentForChain;
+    private static _getFallbackDeploymentConfig;
+    private static _isCacheValid;
     private static _configFallback;
     /**
      * Fetch configuration from the LayerCover API.
@@ -414,6 +444,7 @@ export declare class LayerCoverSDK {
             intentOrderBook: string;
             intentMatcher?: string;
             policyNFT?: string;
+            poolRegistry?: string;
         };
         chainId: number;
         apiBaseUrl: string;
@@ -455,9 +486,9 @@ export declare class LayerCoverSDK {
      */
     getFixedRateQuotes(poolId: number): Promise<FixedRateQuote[]>;
     /**
-     * Refresh a quote to get a fresh reservation (Flash Quote)
+     * Refresh a quote by signing a new intent client-side and submitting it.
      * This is required before executing an intent-based purchase.
-     * The returned reservation is valid for ~10 minutes.
+     * The signer creates a fresh CoverageIntent, signs it, and submits to PUT.
      *
      * @param quoteId The quote ID to refresh
      * @param amount Coverage amount to reserve
@@ -576,13 +607,7 @@ export declare class LayerCoverSDK {
     prepareBuyFromQuoteTx(orderId: number, coverageAmount: bigint, durationSeconds: number, referralCode?: string): Promise<ethers.TransactionRequest>;
     /**
      * Execute a full purchase flow using the intent system.
-     * Use this when the quote doesn't have an on-chain sell order (orderId).
-     *
-     * Steps:
-     * 1. Refresh the quote to get a fresh reservation
-     * 2. Approve premium spending
-     * 3. Post buy order
-     * 4. Fill buy order with the reserve intent
+     * Uses the current IntentMatcher `executeMatchedIntent` path.
      *
      * @param quote The quote to purchase from
      * @param coverageAmount Amount of coverage to purchase
@@ -602,6 +627,9 @@ export declare class LayerCoverSDK {
      * @returns Transaction hash and policy ID
      */
     purchase(poolId: number, coverageAmount: bigint, durationWeeks: number, maxRateBps?: number, referralCode?: string): Promise<PurchaseResult>;
+    private _executeQuotePurchase;
+    private _coerceCoverageIntent;
+    private _syncFilledQuote;
     /**
      * EIP-712 domain for Reserve Intent signing
      */
@@ -615,9 +643,27 @@ export declare class LayerCoverSDK {
      */
     private static readonly COVERAGE_INTENT_DOMAIN;
     /**
+     * EIP-712 domain for Orderbook Auth
+     */
+    private static readonly ORDERBOOK_AUTH_DOMAIN;
+    /**
+     * EIP-712 types for Orderbook Auth
+     */
+    private static readonly ORDERBOOK_AUTH_TYPES;
+    /**
      * EIP-712 types for Coverage Intent
      */
     private static readonly COVERAGE_INTENT_TYPES;
+    /**
+     * EIP-712 types for buyer orders (must match IIntentMatcher.CoverageBuyOrder).
+     */
+    private static readonly COVERAGE_BUY_ORDER_TYPES;
+    private static readonly EXECUTE_MATCHED_INTENT_ABI;
+    /**
+     * Create a Base64-encoded auth header for write endpoints.
+     * @internal
+     */
+    private _createAuthHeader;
     /**
      * Submit a new coverage quote to the orderbook.
      * This allows syndicates to programmatically provide liquidity.
@@ -666,8 +712,9 @@ export declare class LayerCoverSDK {
     /**
      * Cancel an existing quote
      * @param quoteId The quote ID to cancel
+     * @param syndicateAddress The syndicate address that owns the quote (required for auth)
      */
-    cancelQuote(quoteId: string): Promise<boolean>;
+    cancelQuote(quoteId: string, syndicateAddress?: string): Promise<boolean>;
     /**
      * Get quotes for a specific syndicate
      * @param syndicateAddress The syndicate address
@@ -711,6 +758,26 @@ export declare class LayerCoverSDK {
      */
     prepareApprovalTx(poolId: number, amount: bigint): Promise<ethers.ContractTransaction>;
     /**
+     * Deposit assets into a Syndicate vault.
+     * Prefers guarded `depositWithMinShares` and falls back to legacy `deposit` when unavailable.
+     */
+    depositToSyndicate(syndicateAddress: string, assets: bigint, options?: SyndicateDepositOptions): Promise<ethers.TransactionResponse>;
+    /**
+     * Mint Syndicate shares.
+     * Prefers guarded `mintWithMaxAssets` and falls back to legacy `mint` when unavailable.
+     */
+    mintSyndicateShares(syndicateAddress: string, shares: bigint, options?: SyndicateMintOptions): Promise<ethers.TransactionResponse>;
+    /**
+     * Harvest yield from a Syndicate vault.
+     * Prefers guarded `harvestYieldWithDeadline` and falls back to legacy `harvestYield` when unavailable.
+     */
+    harvestSyndicateYield(syndicateAddress: string, minAmount?: bigint, options?: SyndicateDeadlineOptions): Promise<ethers.TransactionResponse>;
+    /**
+     * Run Syndicate upkeep.
+     * Prefers guarded `upkeepWithMinHarvest` and falls back to legacy `upkeep` when unavailable.
+     */
+    runSyndicateUpkeep(syndicateAddress: string, options?: SyndicateUpkeepOptions): Promise<ethers.TransactionResponse>;
+    /**
      * @deprecated Use getFixedRateQuotes() for the current fixed-rate model.
      * This method is no longer supported as the protocol has transitioned to
      * 100% fixed-rate coverage.
@@ -728,9 +795,18 @@ export declare class LayerCoverSDK {
     private _waitForTx;
     private _assertInteger;
     private _assertPositiveBigInt;
+    private _normalizeBps;
+    private _resolveDeadline;
+    private _deriveMinSharesFromPreview;
+    private _deriveMaxAssetsFromPreview;
+    private static _hasRevertData;
+    private static _isMethodUnavailableError;
     private _normalizeReferralCode;
     private _assertConfiguredChain;
+    private _createChainMismatchError;
     private _ensureContracts;
+    private _getSettlementAssetAddress;
+    private _getCoveredTokenAddress;
     private static _randomUint;
     /**
      * Calculate the net yield after deducting insurance cost.

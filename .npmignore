@@ -1,5 +1,6 @@
 # Test files
 tests/
+node_modules/
 
 # Development files
 *.test.ts

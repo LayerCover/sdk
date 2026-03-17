@@ -182,7 +182,7 @@ function useLayerCover({ signer, policyManagerAddress, poolId, decimals = 6, api
             return null;
         }
         try {
-            const { parseUnits } = require('ethers');
+            const { parseUnits } = require('ethers-v6');
             const amountBigInt = parseUnits(amount, decimals);
             const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
             return sdk.calculatePremium(amountBigInt, selectedQuote.premiumRateBps, durationSeconds);
@@ -204,7 +204,7 @@ function useLayerCover({ signer, policyManagerAddress, poolId, decimals = 6, api
         setTxStatus('Preparing...');
         setError('');
         try {
-            const { parseUnits } = await Promise.resolve().then(() => __importStar(require('ethers')));
+            const { parseUnits } = await Promise.resolve().then(() => __importStar(require('ethers-v6')));
             const coverageAmount = parseUnits(amount, decimals);
             const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
             const premium = sdk.calculatePremium(coverageAmount, selectedQuote.premiumRateBps, durationSeconds);

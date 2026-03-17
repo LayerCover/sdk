@@ -2,12 +2,13 @@
  * Unit tests for SDK core: premium calculation, net yield, static helpers,
  * constants, and error classes.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
     LayerCoverSDK,
     RateTooHighError,
     NoQuotesAvailableError,
     CONTRACT_ADDRESSES,
+    DEPLOYMENT_FALLBACK_CONFIGS,
     POOL_CONFIG,
     TOKEN_LOGOS,
     DEFAULT_CHAIN_ID,
@@ -16,7 +17,14 @@ import {
     getIntentOrderBookAddress,
     getTokenLogoUrl,
 } from '../../src/index';
-import { Wallet, JsonRpcProvider } from 'ethers';
+import { Wallet, JsonRpcProvider } from 'ethers-v6';
+import fs from 'node:fs';
+
+function loadDeploymentJson(network: string, instance = 'usdc') {
+    return JSON.parse(
+        fs.readFileSync(new URL(`../../../contracts/deployments/${network}/${instance}.json`, import.meta.url), 'utf8')
+    );
+}
 
 // ──────────────────────────────────────────────────────────────
 // Constants
@@ -36,6 +44,46 @@ describe('Constants', () => {
         expect(addrs).toBeDefined();
         expect(addrs.policyManager).toMatch(/^0x[a-fA-F0-9]{40}$/);
         expect(addrs.intentOrderBook).toMatch(/^0x[a-fA-F0-9]{40}$/);
+    });
+
+    it('contract fallbacks match the current deployment JSONs', () => {
+        const chainExpectations: Array<{ chainId: number; network: string }> = [
+            { chainId: 84532, network: 'base_sepolia' },
+            { chainId: 43113, network: 'avalanche_fuji' },
+            { chainId: 11155111, network: 'ethereum_sepolia' },
+            { chainId: 31337, network: 'localhost' },
+        ];
+
+        for (const { chainId, network } of chainExpectations) {
+            const deployment = loadDeploymentJson(network);
+            expect(CONTRACT_ADDRESSES[chainId]).toEqual({
+                policyManager: deployment.PolicyManager,
+                intentOrderBook: deployment.IntentMatcher,
+                poolRegistry: deployment.PoolRegistry,
+            });
+        }
+    });
+
+    it('deployment fallbacks match the current deployment JSONs', () => {
+        const deploymentExpectations: Array<{ name: string; network: string; instance?: string; chainId: number }> = [
+            { name: 'base_sepolia_usdc', network: 'base_sepolia', chainId: 84532 },
+            { name: 'base_sepolia_wsteth', network: 'base_sepolia', instance: 'wsteth', chainId: 84532 },
+            { name: 'avalanche_fuji_usdc', network: 'avalanche_fuji', chainId: 43113 },
+            { name: 'ethereum_sepolia_usdc', network: 'ethereum_sepolia', chainId: 11155111 },
+            { name: 'localhost_usdc', network: 'localhost', chainId: 31337 },
+        ];
+
+        for (const { name, network, instance = 'usdc', chainId } of deploymentExpectations) {
+            const deployment = loadDeploymentJson(network, instance);
+            expect(DEPLOYMENT_FALLBACK_CONFIGS[name]).toEqual({
+                chainId,
+                contracts: {
+                    policyManager: deployment.PolicyManager,
+                    intentOrderBook: deployment.IntentMatcher,
+                    poolRegistry: deployment.PoolRegistry,
+                },
+            });
+        }
     });
 
     it('POOL_CONFIG has at least one pool', () => {
@@ -73,6 +121,62 @@ describe('getIntentOrderBookAddress', () => {
 
     it('throws for unknown chain', () => {
         expect(() => getIntentOrderBookAddress(12345)).toThrow('not deployed on chain 12345');
+    });
+});
+
+describe('runtime compatibility helpers', () => {
+    function createSdk(): LayerCoverSDK {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        return new LayerCoverSDK(provider, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+        });
+    }
+
+    it('getPaymentToken resolves the settlement asset instead of PoolRegistry token data', async () => {
+        const sdk = createSdk();
+        const settlementAsset = '0x' + '22'.repeat(20);
+        const resolveSettlementAsset = vi.fn().mockResolvedValue(settlementAsset);
+        (sdk as any)._getSettlementAssetAddress = resolveSettlementAsset;
+
+        await expect(sdk.getPaymentToken(7)).resolves.toBe(settlementAsset);
+        expect(resolveSettlementAsset).toHaveBeenCalledOnce();
+    });
+
+    it('prefers getPoolVaultCoverConfig on the current PoolRegistry surface', async () => {
+        const sdk = createSdk();
+        const coveredToken = '0x' + '33'.repeat(20);
+        const poolRegistry = {
+            getPoolVaultCoverConfig: vi.fn().mockResolvedValue([coveredToken, false]),
+            getPoolStaticData: vi.fn(),
+        };
+
+        (sdk as any)._ensureContracts = vi.fn();
+        (sdk as any)._poolRegistry = poolRegistry;
+        (sdk as any)._getSettlementAssetAddress = vi.fn();
+        (sdk as any)._log = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+        await expect((sdk as any)._getCoveredTokenAddress(3)).resolves.toBe(coveredToken);
+        expect(poolRegistry.getPoolVaultCoverConfig).toHaveBeenCalledWith(3);
+        expect(poolRegistry.getPoolStaticData).not.toHaveBeenCalled();
+    });
+
+    it('falls back to legacy getPoolStaticData when the focused getter is unavailable', async () => {
+        const sdk = createSdk();
+        const legacyToken = '0x' + '44'.repeat(20);
+        const poolRegistry = {
+            getPoolVaultCoverConfig: vi.fn().mockRejectedValue(new Error('missing')),
+            getPoolStaticData: vi.fn().mockResolvedValue([legacyToken]),
+        };
+
+        (sdk as any)._ensureContracts = vi.fn();
+        (sdk as any)._poolRegistry = poolRegistry;
+        (sdk as any)._getSettlementAssetAddress = vi.fn();
+        (sdk as any)._log = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+        await expect((sdk as any)._getCoveredTokenAddress(9)).resolves.toBe(legacyToken);
+        expect(poolRegistry.getPoolStaticData).toHaveBeenCalledWith(9);
     });
 });
 
@@ -287,7 +391,7 @@ describe('LayerCoverSDK constructor', () => {
         const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), { chainId: 84532 });
 
         await expect(sdk.purchase(1, 1n, 1)).rejects.toThrow(
-            'Chain mismatch: SDK configured for 84532, signer connected to 1'
+            'Chain mismatch: SDK configured for 84532 (deployment base_sepolia_usdc), signer connected to 1'
         );
     });
 });

@@ -11,7 +11,7 @@ const material_1 = require("@mui/material");
 const Close_1 = __importDefault(require("@mui/icons-material/Close"));
 const ExpandMore_1 = __importDefault(require("@mui/icons-material/ExpandMore"));
 const OpenInNew_1 = __importDefault(require("@mui/icons-material/OpenInNew"));
-const ethers_1 = require("ethers");
+const ethers_1 = require("ethers-v6");
 const index_1 = require("../../index");
 const logo_1 = require("./logo");
 // Helper to detect if a color is light (for logo selection)
@@ -76,7 +76,7 @@ const errors_1 = require("../../errors");
  * />
  * ```
  */
-function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, onSuccess, theme: themeOverrides, referralCode, apiBaseUrl, }) {
+function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, onSuccess, theme: themeOverrides, referralCode, apiBaseUrl, deployment, }) {
     // Merge custom theme with defaults
     const theme = (0, react_1.useMemo)(() => ({ ...theme_1.defaultTheme, ...themeOverrides }), [themeOverrides]);
     // Create MUI theme from our custom theme
@@ -111,20 +111,28 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
     const [chainError, setChainError] = (0, react_1.useState)('');
     (0, react_1.useEffect)(() => {
         const initSdk = async () => {
-            if (!signer)
+            if (!open)
                 return;
+            if (!signer) {
+                setSdk(null);
+                setChainError('Wallet not connected');
+                return;
+            }
             try {
-                const instance = await index_1.LayerCoverSDK.create(signer, { apiBaseUrl });
+                const instance = await index_1.LayerCoverSDK.create(signer, { apiBaseUrl, deployment });
                 setSdk(instance);
                 setChainError('');
             }
             catch (e) {
                 console.error('Failed to initialize SDK:', e);
-                setChainError(e.message || 'Unsupported network');
+                const message = e?.message || 'Unsupported network';
+                setSdk(null);
+                setChainError(message);
+                setError(message);
             }
         };
         initSdk();
-    }, [signer, apiBaseUrl]);
+    }, [open, signer, apiBaseUrl, deployment]);
     const [activeTab, setActiveTab] = (0, react_1.useState)(0);
     const [amount, setAmount] = (0, react_1.useState)('');
     const [weeks, setWeeks] = (0, react_1.useState)(4);
@@ -134,11 +142,12 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
     const [error, setError] = (0, react_1.useState)('');
     const [txStatus, setTxStatus] = (0, react_1.useState)('');
     const [poolMetadata, setPoolMetadata] = (0, react_1.useState)(null);
-    const [metadataLoading, setMetadataLoading] = (0, react_1.useState)(true);
+    const [metadataLoading, setMetadataLoading] = (0, react_1.useState)(false);
     // Derived values from pool metadata
     const tokenSymbol = poolMetadata?.tokenSymbol || '';
     const tokenDecimals = poolMetadata?.tokenDecimals || 6;
     const tokenLogoUrl = poolMetadata?.tokenLogoUrl;
+    const payoutTokenSymbol = poolMetadata?.payoutTokenSymbol || 'USDC';
     const payoutTokenLogoUrl = poolMetadata?.payoutTokenLogoUrl;
     const endDate = (0, react_1.useMemo)(() => {
         const date = new Date();
@@ -152,12 +161,19 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
             setBestQuote(null);
             setEstimatedPremium(null);
             setActiveTab(0);
+            setMetadataLoading(true);
         }
     }, [open]);
     // Fetch pool metadata when modal opens
     (0, react_1.useEffect)(() => {
         const fetchMetadata = async () => {
-            if (!open || !sdk) {
+            if (!open) {
+                setMetadataLoading(false);
+                return;
+            }
+            if (!sdk) {
+                if (chainError)
+                    setMetadataLoading(false);
                 return;
             }
             setMetadataLoading(true);
@@ -174,7 +190,7 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
             }
         };
         fetchMetadata();
-    }, [open, sdk, poolId]);
+    }, [open, sdk, poolId, chainError]);
     // Auto-fetch quote when amount or weeks change
     (0, react_1.useEffect)(() => {
         const fetchQuote = async () => {
@@ -260,7 +276,7 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
                                     },
                                 }, children: [(0, jsx_runtime_1.jsx)(material_1.Tab, { label: "Purchase" }), (0, jsx_runtime_1.jsx)(material_1.Tab, { label: "How it works" })] }), (0, jsx_runtime_1.jsx)(material_1.IconButton, { onClick: onClose, size: "small", sx: { color: 'grey.500' }, children: (0, jsx_runtime_1.jsx)(Close_1.default, {}) })] }) }), (0, jsx_runtime_1.jsx)(material_1.DialogContent, { children: metadataLoading ? (
                     /* Loading state */
-                    (0, jsx_runtime_1.jsx)(material_1.Box, { display: "flex", justifyContent: "center", alignItems: "center", py: 8, children: (0, jsx_runtime_1.jsx)(material_1.CircularProgress, {}) })) : activeTab === 0 ? (
+                    (0, jsx_runtime_1.jsx)(material_1.Box, { display: "flex", justifyContent: "center", alignItems: "center", py: 8, children: (0, jsx_runtime_1.jsx)(material_1.CircularProgress, {}) })) : chainError ? ((0, jsx_runtime_1.jsx)(material_1.Alert, { severity: "error", children: chainError })) : activeTab === 0 ? (
                     /* Purchase Tab */
                     (0, jsx_runtime_1.jsxs)(material_1.Box, { display: "flex", flexDirection: "column", gap: 5, children: [(0, jsx_runtime_1.jsxs)(material_1.Box, { children: [(0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", mb: 1, children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: "Amount" }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "caption", color: "text.secondary", children: ["Enter the amount of ", tokenSymbol ? `${tokenSymbol} ` : '', "cover"] })] }), (0, jsx_runtime_1.jsx)(material_1.TextField, { value: amount, onChange: (e) => setAmount(e.target.value), type: "text", inputProps: {
                                             inputMode: 'decimal',
@@ -282,7 +298,7 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
                                             backgroundColor: theme.inputBackgroundColor,
                                             borderRadius: theme.inputBorderRadius / 4,
                                             p: 2,
-                                        }, children: (0, jsx_runtime_1.jsxs)(material_1.Stack, { spacing: 2, children: [(0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Premium Rate" }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(bestQuote.premiumRateBps / 100).toFixed(2), "% APY"] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", color: "text.secondary", children: ["Estimated Cost (", weeks, "w)"] }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(0, ethers_1.formatUnits)(estimatedPremium, tokenDecimals), " ", tokenSymbol] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Coverage Amount" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [tokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: tokenLogoUrl, alt: tokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [amount, " ", tokenSymbol] })] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Payout Token" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [payoutTokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: payoutTokenLogoUrl, alt: "USDC", style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: "USDC" })] })] })] }) })] })), error && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "error", variant: "caption", children: error })), txStatus && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "primary", variant: "caption", children: txStatus })), (0, jsx_runtime_1.jsx)(material_1.Button, { variant: "contained", size: "large", fullWidth: true, onClick: handlePurchase, disabled: loading || !bestQuote || !amount, sx: {
+                                        }, children: (0, jsx_runtime_1.jsxs)(material_1.Stack, { spacing: 2, children: [(0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Premium Rate" }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(bestQuote.premiumRateBps / 100).toFixed(2), "% APY"] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", children: [(0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", color: "text.secondary", children: ["Estimated Cost (", weeks, "w)"] }), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [(0, ethers_1.formatUnits)(estimatedPremium, tokenDecimals), ' ', payoutTokenSymbol] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Coverage Amount" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [tokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: tokenLogoUrl, alt: tokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsxs)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: [amount, " ", tokenSymbol] })] })] }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", children: [(0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", color: "text.secondary", children: "Payout Token" }), (0, jsx_runtime_1.jsxs)(material_1.Stack, { direction: "row", alignItems: "center", gap: 0.75, children: [payoutTokenLogoUrl && ((0, jsx_runtime_1.jsx)("img", { src: payoutTokenLogoUrl, alt: payoutTokenSymbol, style: { width: 16, height: 16, borderRadius: '50%' } })), (0, jsx_runtime_1.jsx)(material_1.Typography, { variant: "body2", fontWeight: "medium", children: payoutTokenSymbol })] })] })] }) })] })), error && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "error", variant: "caption", children: error })), txStatus && ((0, jsx_runtime_1.jsx)(material_1.Typography, { color: "primary", variant: "caption", children: txStatus })), (0, jsx_runtime_1.jsx)(material_1.Button, { variant: "contained", size: "large", fullWidth: true, onClick: handlePurchase, disabled: loading || !bestQuote || !amount, sx: {
                                     py: 1.5,
                                     borderRadius: theme.inputBorderRadius / 4,
                                     background: bestQuote

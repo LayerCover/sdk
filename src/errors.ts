@@ -57,6 +57,35 @@ export const ERROR_MESSAGES: Record<string, string> = {
     '0x54f41f12': 'Transaction requirement failed.',
 };
 
+const CHAIN_DISPLAY_NAMES: Record<number, string> = {
+    31337: 'Localhost',
+    43113: 'Avalanche Fuji',
+    84532: 'Base Sepolia',
+};
+
+function getExpectedChainId(error: any): number | null {
+    if (typeof error?.expectedChainId === 'number' && Number.isFinite(error.expectedChainId)) {
+        return error.expectedChainId;
+    }
+
+    const message = String(error?.message || '');
+    const match = message.match(/configured for (\d+)/i);
+    if (!match) return null;
+
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getExpectedDeployment(error: any): string | null {
+    if (typeof error?.expectedDeployment === 'string' && error.expectedDeployment.trim()) {
+        return error.expectedDeployment.trim();
+    }
+
+    const message = String(error?.message || '');
+    const match = message.match(/\(deployment ([^)]+)\)/i);
+    return match?.[1]?.trim() || null;
+}
+
 /**
  * Decode a contract or wallet error into a human-readable message.
  *
@@ -117,7 +146,23 @@ export function getHumanError(error: any): string {
         return 'Network error. Please check your connection and try again.';
     }
     if (msg.includes('chain mismatch') || msg.includes('wrong network')) {
-        return 'Wrong network. Please switch to Base Sepolia in your wallet.';
+        const expectedChainId = getExpectedChainId(error);
+        const expectedDeployment = getExpectedDeployment(error);
+        const chainLabel = expectedChainId ? CHAIN_DISPLAY_NAMES[expectedChainId] : null;
+
+        if (chainLabel && expectedDeployment) {
+            return `Wrong network. Please switch to ${chainLabel} (${expectedDeployment}) in your wallet.`;
+        }
+        if (chainLabel && expectedChainId) {
+            return `Wrong network. Please switch to ${chainLabel} (chain ${expectedChainId}) in your wallet.`;
+        }
+        if (expectedChainId) {
+            return `Wrong network. Please switch to chain ${expectedChainId} in your wallet.`;
+        }
+        if (expectedDeployment) {
+            return `Wrong network. Please switch to the ${expectedDeployment} deployment network in your wallet.`;
+        }
+        return 'Wrong network. Please switch to the configured deployment network in your wallet.';
     }
 
     // ── Ethers shortMessage fallback ───────────────────────────────────

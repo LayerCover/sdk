@@ -508,25 +508,27 @@
                 // Wait for confirmation
                 await new Promise(r => setTimeout(r, 5000));
 
-                // Step 3d: Confirm purchase
-                log('Confirming purchase...');
+                // Step 3d: Sync purchase state
+                log('Syncing purchase state...');
+                const idempotencyKey = `purchase-sync:${quoteId}:${purchaseHash.toLowerCase()}`;
 
-                const confirmResponse = await fetch(`${API_BASE}/api/purchase/confirm`, {
+                const syncResponse = await fetch(`${API_BASE}/api/purchase/sync`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         quoteId,
                         txHash: purchaseHash,
-                        filledAmount: amountWei
+                        filledAmount: amountWei,
+                        idempotencyKey
                     })
                 });
 
-                const confirmData = await confirmResponse.json();
-                if (confirmData.success) {
+                const syncData = await syncResponse.json();
+                if (syncData.success) {
                     log('🎉 Purchase complete!', 'success');
                     updateStep(4, 'done');
                 } else {
-                    log(`Confirmation issue: ${confirmData.error}`, 'error');
+                    log(`Sync issue: ${syncData.error}`, 'error');
                 }
 
             } catch (error) {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { LayerCoverSDK, FixedRateQuote, PurchaseResult, CoveragePool } from '../../index';
 import { getHumanError } from '../../errors';
-import type { Signer, Provider } from 'ethers';
+import type { Signer, Provider } from 'ethers-v6';
 
 export interface UseLayerCoverOptions {
     /** Ethers v6 signer (for purchases) or provider (for read-only) */
@@ -220,7 +220,7 @@ export function useLayerCover({
                 return null;
             }
             try {
-                const { parseUnits } = require('ethers');
+                const { parseUnits } = require('ethers-v6');
                 const amountBigInt = parseUnits(amount, decimals);
                 const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
                 return sdk.calculatePremium(amountBigInt, selectedQuote.premiumRateBps, durationSeconds);
@@ -252,7 +252,7 @@ export function useLayerCover({
             setError('');
 
             try {
-                const { parseUnits } = await import('ethers');
+                const { parseUnits } = await import('ethers-v6');
                 const coverageAmount = parseUnits(amount, decimals);
                 const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
 

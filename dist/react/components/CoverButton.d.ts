@@ -21,6 +21,8 @@ export interface CoverButtonProps {
     referralCode?: string;
     /** Optional API base URL for quotes (default: https://app.layercover.com) */
     apiBaseUrl?: string;
+    /** Optional deployment identifier (for example, `avalanche_fuji_usdc`) */
+    deployment?: string;
 }
 /**
  * All-in-one Cover button with integrated modal.
@@ -39,5 +41,5 @@ export interface CoverButtonProps {
  * />
  * ```
  */
-export declare function CoverButton({ signer, poolId, availableBalance, onSuccess, theme, buttonText, disabled, buttonProps, referralCode, apiBaseUrl, }: CoverButtonProps): import("react/jsx-runtime").JSX.Element;
+export declare function CoverButton({ signer, poolId, availableBalance, onSuccess, theme, buttonText, disabled, buttonProps, referralCode, apiBaseUrl, deployment, }: CoverButtonProps): import("react/jsx-runtime").JSX.Element;
 //# sourceMappingURL=CoverButton.d.ts.map

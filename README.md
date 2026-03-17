@@ -23,7 +23,7 @@ npm install @mui/material @mui/icons-material @emotion/react @emotion/styled rea
 ```tsx
 import { CoverButton } from '@layercover/sdk/react';
 
-<CoverButton signer={signer} poolId={1} />
+<CoverButton signer={signer} poolId={1} deployment="avalanche_fuji_usdc" />
 ```
 
 ### Headless SDK
@@ -31,8 +31,10 @@ import { CoverButton } from '@layercover/sdk/react';
 ```ts
 import { LayerCoverSDK } from '@layercover/sdk';
 
-// Auto-configure from API (recommended)
-const sdk = await LayerCoverSDK.create(signer);
+// Auto-configure from API for a specific deployment (recommended)
+const sdk = await LayerCoverSDK.create(signer, {
+  deployment: 'avalanche_fuji_usdc',
+});
 
 // Browse pools
 const pools = await sdk.listPools();
@@ -48,7 +50,9 @@ const result = await sdk.purchase(pools[0].poolId, coverAmount, durationWeeks);
 import { LayerCoverSDK, ViemAdapter } from '@layercover/sdk';
 
 const signer = ViemAdapter.fromWalletClient(walletClient);
-const sdk = await LayerCoverSDK.create(signer);
+const sdk = await LayerCoverSDK.create(signer, {
+  deployment: 'avalanche_fuji_usdc',
+});
 ```
 
 ## API Reference
@@ -90,9 +94,10 @@ const premium = sdk.calculatePremium(
 | Method | Description |
 |--------|-------------|
 | `sdk.purchase(poolId, amount, weeks, maxRateBps?, referralCode?)` | **Simplified** — auto-picks the best quote and path |
-| `sdk.purchaseWithIntent(quote, amount, durationSecs, referralCode?)` | Intent-based purchase with approval + matching |
-| `sdk.prepareBuyFromQuoteTx(orderId, amount, durationSecs, referralCode?)` | Prepare TX for on-chain sell orders |
+| `sdk.purchaseWithIntent(quote, amount, durationSecs, referralCode?)` | Intent-based purchase using `executeMatchedIntent` |
 | `sdk.prepareApprovalTx(poolId, amount)` | Prepare an ERC-20 approval for premium |
+
+`prepareBuyFromQuoteTx(...)` is deprecated on current deployments and will throw.
 
 ### Policy Management
 
@@ -197,6 +202,8 @@ import { useLayerCover, BuyCoverModal, CoverButton } from '@layercover/sdk/react
 - **`<BuyCoverModal>`** — Standalone modal with pool picker, quotes, and purchase flow
 - **`useLayerCover()`** — Hook with live quotes, pool discovery, and purchase
 
+For multi-chain integrations, pass `deployment` explicitly to React helpers so the SDK resolves the correct network and contract set.
+
 ## Configuration
 
 The SDK auto-discovers contract addresses via the `/api/config` endpoint. You can override defaults:
@@ -227,11 +234,11 @@ const sdk = new LayerCoverSDK(signer, policyManagerAddress, {
 ```
 
 Referral code note:
-`purchase(...)` and `prepareBuyFromQuoteTx(...)` expect `referralCode` as bytes32 hex (`0x` + 64 hex chars).
+`purchase(...)` and `purchaseWithIntent(...)` expect `referralCode` as bytes32 hex (`0x` + 64 hex chars).
 
 ## Testnet Smoke Test
 
-From `packages/sdk`:
+From `sdk/`:
 
 ```bash
 # Safe mode (no tx sent): create -> listPools -> getBestRate -> purchase prechecks
