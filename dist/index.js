@@ -18,7 +18,7 @@ exports.LayerCoverSDK = exports.NoQuotesAvailableError = exports.RateTooHighErro
 exports.getTokenLogoUrl = getTokenLogoUrl;
 exports.getPolicyManagerAddress = getPolicyManagerAddress;
 exports.getIntentOrderBookAddress = getIntentOrderBookAddress;
-const ethers_1 = require("ethers-v6");
+const ethers_v6_1 = require("ethers-v6");
 const errors_1 = require("./errors");
 __exportStar(require("./adapters"), exports);
 __exportStar(require("./viem-adapter"), exports);
@@ -109,9 +109,9 @@ exports.CONTRACT_ADDRESSES = {
     },
     // Avalanche Fuji (testnet)
     43113: {
-        policyManager: '0xe2fC6C13ABd4FdD8656F4e3985Bf3481aA586dce',
-        intentOrderBook: '0x221e12F38Be3d1C49Ac126fa739a402652cc18aE',
-        poolRegistry: '0xAE2273A1c40f2b8449463752Ce4a0445F3DA502C',
+        policyManager: '0x573e39aB7edfD840778C131d49AE89968bC53C0A',
+        intentOrderBook: '0x67e456aa9b976FD75398d94C3Be17FBb55c865ab',
+        poolRegistry: '0xDddF32B1e6406D090B35edf770c90A18D55E75fb',
     },
     // Ethereum Sepolia (testnet)
     11155111: {
@@ -146,9 +146,9 @@ exports.DEPLOYMENT_FALLBACK_CONFIGS = {
     avalanche_fuji_usdc: {
         chainId: 43113,
         contracts: {
-            policyManager: '0xe2fC6C13ABd4FdD8656F4e3985Bf3481aA586dce',
-            intentOrderBook: '0x221e12F38Be3d1C49Ac126fa739a402652cc18aE',
-            poolRegistry: '0xAE2273A1c40f2b8449463752Ce4a0445F3DA502C',
+            policyManager: '0x573e39aB7edfD840778C131d49AE89968bC53C0A',
+            intentOrderBook: '0x67e456aa9b976FD75398d94C3Be17FBb55c865ab',
+            poolRegistry: '0xDddF32B1e6406D090B35edf770c90A18D55E75fb',
         },
     },
     ethereum_sepolia_usdc: {
@@ -274,7 +274,7 @@ class LayerCoverSDK {
         this._retryDelayMs = Math.max(0, options.retryDelayMs ?? DEFAULT_API_RETRY_DELAY_MS);
         this._txConfirmations = Math.max(1, options.txConfirmations ?? DEFAULT_TX_CONFIRMATIONS);
         this._txWaitTimeoutMs = Math.max(1000, options.txWaitTimeoutMs ?? DEFAULT_TX_WAIT_TIMEOUT_MS);
-        this.policyManager = new ethers_1.Contract(policyManagerAddress, [
+        this.policyManager = new ethers_v6_1.Contract(policyManagerAddress, [
             'function poolRegistry() view returns (address)',
             'function riskManager() view returns (address)',
             'function underwriterManager() view returns (address)',
@@ -289,8 +289,8 @@ class LayerCoverSDK {
         // Initialize IntentOrderBook
         const orderBookAddress = options.intentOrderBookAddress ||
             exports.CONTRACT_ADDRESSES[this._chainId]?.intentOrderBook;
-        if (orderBookAddress && orderBookAddress !== ethers_1.ethers.ZeroAddress) {
-            this.intentOrderBook = new ethers_1.Contract(orderBookAddress, [
+        if (orderBookAddress && orderBookAddress !== ethers_v6_1.ethers.ZeroAddress) {
+            this.intentOrderBook = new ethers_v6_1.Contract(orderBookAddress, [
                 // Current IntentMatcher entrypoint (supports Permit2 + vault-cover order fields)
                 'function executeMatchedIntent(tuple(address maker, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 minDuration, uint256 maxDuration, uint256 nonce, uint256 expiry, uint256 salt, bool requiresUpfront, uint16 cancellationPenaltyBps, uint256 minFillAmount, address whitelistedBuyer)[] intents, bytes[] intentSignatures, tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode, address vault, uint256 sharesToCover) order, bytes orderSignature, uint256[] fillAmounts, address vault, uint256 sharesToCover, uint256 permit2Nonce, uint256 permit2Deadline, bytes permit2Signature) external returns (uint256[])',
             ], this.signer || this.provider);
@@ -599,7 +599,7 @@ class LayerCoverSDK {
         const now = Math.floor(Date.now() / 1000);
         const newExpiry = now + 600; // 10 minutes for reservation
         const nonce = LayerCoverSDK._randomUint(12).toString();
-        const salt = ethers_1.ethers.hexlify(ethers_1.ethers.randomBytes(32));
+        const salt = ethers_v6_1.ethers.hexlify(ethers_v6_1.ethers.randomBytes(32));
         const newIntent = {
             maker: syndicateAddress,
             poolId,
@@ -614,12 +614,12 @@ class LayerCoverSDK {
             requiresUpfront: true,
             cancellationPenaltyBps: 0,
             minFillAmount: '0',
-            whitelistedBuyer: existingQuote.whitelistedBuyer || ethers_1.ethers.ZeroAddress,
+            whitelistedBuyer: existingQuote.whitelistedBuyer || ethers_v6_1.ethers.ZeroAddress,
         };
         // Resolve IntentMatcher for signing domain
         const addresses = exports.CONTRACT_ADDRESSES[this._chainId];
         const intentMatcher = addresses?.intentOrderBook;
-        if (!intentMatcher || intentMatcher === ethers_1.ethers.ZeroAddress) {
+        if (!intentMatcher || intentMatcher === ethers_v6_1.ethers.ZeroAddress) {
             throw new Error(`IntentMatcher address not found for chain ${this._chainId}`);
         }
         const intentDomain = {
@@ -956,14 +956,14 @@ class LayerCoverSDK {
         const premiumWithBuffer = (premium * 105n) / 100n;
         // 3. Approve IntentMatcher to spend premium (ERC20 transferFrom path).
         const paymentToken = await this.getPaymentToken(quote.poolId);
-        const tokenContract = new ethers_1.Contract(paymentToken, [
+        const tokenContract = new ethers_v6_1.Contract(paymentToken, [
             'function approve(address spender, uint256 amount) returns (bool)',
             'function allowance(address owner, address spender) view returns (uint256)',
         ], this.signer);
         const allowance = await tokenContract.allowance(signerAddress, intentMatcherAddress);
         if (allowance < premiumWithBuffer) {
             this._log.debug('[LayerCover SDK] Approving premium spend…');
-            const approveTx = await tokenContract.approve(intentMatcherAddress, ethers_1.ethers.MaxUint256);
+            const approveTx = await tokenContract.approve(intentMatcherAddress, ethers_v6_1.ethers.MaxUint256);
             await this._waitForTx(approveTx);
             this._log.debug('[LayerCover SDK] Approval confirmed');
         }
@@ -979,7 +979,7 @@ class LayerCoverSDK {
             expiry: now + 3600, // 1 hour
             salt: LayerCoverSDK._randomUint(32),
             referralCode: normalizedReferralCode,
-            vault: ethers_1.ethers.ZeroAddress,
+            vault: ethers_v6_1.ethers.ZeroAddress,
             sharesToCover: 0n,
         };
         const domain = {
@@ -991,9 +991,9 @@ class LayerCoverSDK {
         this._log.debug('[LayerCover SDK] Signing buy order (EIP-712)…');
         const orderSignature = await this.signer.signTypedData(domain, LayerCoverSDK.COVERAGE_BUY_ORDER_TYPES, buyerOrder);
         // 5. Execute matched intent (Permit2 params intentionally empty for approval/transferFrom path).
-        const intentMatcher = new ethers_1.Contract(intentMatcherAddress, LayerCoverSDK.EXECUTE_MATCHED_INTENT_ABI, this.signer);
+        const intentMatcher = new ethers_v6_1.Contract(intentMatcherAddress, LayerCoverSDK.EXECUTE_MATCHED_INTENT_ABI, this.signer);
         this._log.debug('[LayerCover SDK] Executing purchase…');
-        const tx = await intentMatcher.executeMatchedIntent([sellerIntent], [intentSignature], buyerOrder, orderSignature, [coverageAmount], ethers_1.ethers.ZeroAddress, // vault
+        const tx = await intentMatcher.executeMatchedIntent([sellerIntent], [intentSignature], buyerOrder, orderSignature, [coverageAmount], ethers_v6_1.ethers.ZeroAddress, // vault
         0, // sharesToCover
         0, // permit2Nonce
         0, // permit2Deadline
@@ -1002,7 +1002,7 @@ class LayerCoverSDK {
         const receipt = await this._waitForTx(tx);
         this._log.debug('[LayerCover SDK] Purchase confirmed:', tx.hash);
         // 6. Extract policyId from emitted events.
-        const policyCreatedIface = new ethers_1.ethers.Interface([
+        const policyCreatedIface = new ethers_v6_1.ethers.Interface([
             'event PolicyCreated(uint256 indexed policyId, address indexed holder, uint256 poolId)',
             'event IntentPolicyCreated(uint256 indexed policyId, address indexed buyer, address indexed underwriter, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 duration, bytes32 reservationKey)',
             'event IntentMatched(address indexed underwriter, address indexed buyer, uint256 indexed poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 duration, uint256 policyId)',
@@ -1046,8 +1046,8 @@ class LayerCoverSDK {
         const requiresUpfront = raw.requiresUpfront ?? true;
         const cancellationPenaltyBps = Number(raw.cancellationPenaltyBps ?? 0);
         const minFillAmount = BigInt(raw.minFillAmount ?? 0);
-        const whitelistedBuyer = raw.whitelistedBuyer || ethers_1.ethers.ZeroAddress;
-        if (!maker || !ethers_1.ethers.isAddress(maker)) {
+        const whitelistedBuyer = raw.whitelistedBuyer || ethers_v6_1.ethers.ZeroAddress;
+        if (!maker || !ethers_v6_1.ethers.isAddress(maker)) {
             throw new Error('Quote refresh returned incompatible intent: missing maker');
         }
         if (!Number.isInteger(poolId) || poolId < 0) {
@@ -1153,7 +1153,7 @@ class LayerCoverSDK {
         if (!this.signer) {
             throw new Error('Signer required to submit quotes');
         }
-        const { poolId, syndicateAddress, coverageAmount, premiumRateBps, minDurationWeeks, maxDurationWeeks, allowPartialFill = false, minFillAmount, expiryHours = 24, whitelistedBuyer = ethers_1.ethers.ZeroAddress, intentMatcherAddress, } = params;
+        const { poolId, syndicateAddress, coverageAmount, premiumRateBps, minDurationWeeks, maxDurationWeeks, allowPartialFill = false, minFillAmount, expiryHours = 24, whitelistedBuyer = ethers_v6_1.ethers.ZeroAddress, intentMatcherAddress, } = params;
         this._assertInteger('poolId', poolId, 0);
         this._assertPositiveBigInt('coverageAmount', coverageAmount);
         this._assertInteger('premiumRateBps', premiumRateBps, 1);
@@ -1173,7 +1173,7 @@ class LayerCoverSDK {
         const reservationExpiry = Math.floor(Date.now() / 1000) + expiryHours * 60 * 60;
         // Generate nonce and salt
         const nonce = LayerCoverSDK._randomUint(12).toString();
-        const salt = ethers_1.ethers.hexlify(ethers_1.ethers.randomBytes(32));
+        const salt = ethers_v6_1.ethers.hexlify(ethers_v6_1.ethers.randomBytes(32));
         // Create Reserve Intent
         const reserveIntent = {
             solver: signerAddress,
@@ -1207,7 +1207,7 @@ class LayerCoverSDK {
             allowPartialFill: reserveIntent.allowPartialFill,
             reservationExpiry: reserveIntent.reservationExpiry,
             nonce: BigInt(reserveIntent.nonce),
-            whitelistedBuyer: reserveIntent.whitelistedBuyer || ethers_1.ethers.ZeroAddress,
+            whitelistedBuyer: reserveIntent.whitelistedBuyer || ethers_v6_1.ethers.ZeroAddress,
             minPremiumBps: reserveIntent.minPremiumBps,
             cancellationPenaltyBps: reserveIntent.cancellationPenaltyBps,
         };
@@ -1227,7 +1227,7 @@ class LayerCoverSDK {
             requiresUpfront: true,
             cancellationPenaltyBps: 0,
             minFillAmount: (minFillAmount ?? (allowPartialFill ? 0n : coverageAmount)).toString(),
-            whitelistedBuyer: whitelistedBuyer || ethers_1.ethers.ZeroAddress,
+            whitelistedBuyer: whitelistedBuyer || ethers_v6_1.ethers.ZeroAddress,
         };
         // Resolve IntentMatcher address
         let intentMatcher = intentMatcherAddress;
@@ -1235,7 +1235,7 @@ class LayerCoverSDK {
             const addresses = exports.CONTRACT_ADDRESSES[chainId];
             intentMatcher = addresses?.intentOrderBook;
         }
-        if (!intentMatcher || intentMatcher === ethers_1.ethers.ZeroAddress) {
+        if (!intentMatcher || intentMatcher === ethers_v6_1.ethers.ZeroAddress) {
             throw new Error(`IntentMatcher address not found for chain ${chainId}. Provide intentMatcherAddress in params.`);
         }
         // Sign Coverage Intent
@@ -1269,7 +1269,7 @@ class LayerCoverSDK {
             premiumRateBps,
             minDurationWeeks,
             maxDurationWeeks,
-            whitelistedBuyer: whitelistedBuyer !== ethers_1.ethers.ZeroAddress ? whitelistedBuyer : undefined,
+            whitelistedBuyer: whitelistedBuyer !== ethers_v6_1.ethers.ZeroAddress ? whitelistedBuyer : undefined,
             reserveIntent,
             signature: reserveSignature,
             coverageIntent,
@@ -1389,7 +1389,7 @@ class LayerCoverSDK {
         await this._ensureContracts();
         const tokenAddress = await this._getCoveredTokenAddress(poolId);
         // Create token contract to read metadata
-        const tokenContract = new ethers_1.Contract(tokenAddress, [
+        const tokenContract = new ethers_v6_1.Contract(tokenAddress, [
             'function symbol() view returns (string)',
             'function decimals() view returns (uint8)',
             'function name() view returns (string)',
@@ -1436,7 +1436,7 @@ class LayerCoverSDK {
         const orderBookAddress = this.intentOrderBook
             ? await this.intentOrderBook.getAddress()
             : await this.policyManager.getAddress();
-        const token = new ethers_1.Contract(tokenAddress, [
+        const token = new ethers_v6_1.Contract(tokenAddress, [
             'function approve(address spender, uint256 amount) external returns (bool)'
         ], this.signer || this.provider);
         return await token.approve.populateTransaction(orderBookAddress, amount);
@@ -1455,10 +1455,10 @@ class LayerCoverSDK {
         await this._assertConfiguredChain();
         const signerAddress = await this.signer.getAddress();
         const receiver = options.receiver ?? signerAddress;
-        if (ethers_1.ethers.getAddress(receiver) !== ethers_1.ethers.getAddress(signerAddress)) {
+        if (ethers_v6_1.ethers.getAddress(receiver) !== ethers_v6_1.ethers.getAddress(signerAddress)) {
             throw new Error('receiver must equal signer address for syndicate deposits');
         }
-        const syndicate = new ethers_1.Contract(syndicateAddress, [
+        const syndicate = new ethers_v6_1.Contract(syndicateAddress, [
             'function previewDeposit(uint256 assets) view returns (uint256)',
             'function deposit(uint256 assets, address receiver) returns (uint256)',
             'function depositWithMinShares(uint256 assets, address receiver, uint256 minShares, uint256 deadline) returns (uint256)',
@@ -1486,10 +1486,10 @@ class LayerCoverSDK {
         await this._assertConfiguredChain();
         const signerAddress = await this.signer.getAddress();
         const receiver = options.receiver ?? signerAddress;
-        if (ethers_1.ethers.getAddress(receiver) !== ethers_1.ethers.getAddress(signerAddress)) {
+        if (ethers_v6_1.ethers.getAddress(receiver) !== ethers_v6_1.ethers.getAddress(signerAddress)) {
             throw new Error('receiver must equal signer address for syndicate mints');
         }
-        const syndicate = new ethers_1.Contract(syndicateAddress, [
+        const syndicate = new ethers_v6_1.Contract(syndicateAddress, [
             'function previewMint(uint256 shares) view returns (uint256)',
             'function mint(uint256 shares, address receiver) returns (uint256)',
             'function mintWithMaxAssets(uint256 shares, address receiver, uint256 maxAssets, uint256 deadline) returns (uint256)',
@@ -1517,7 +1517,7 @@ class LayerCoverSDK {
             throw new Error('minAmount must be a bigint >= 0');
         }
         await this._assertConfiguredChain();
-        const syndicate = new ethers_1.Contract(syndicateAddress, [
+        const syndicate = new ethers_v6_1.Contract(syndicateAddress, [
             'function harvestYield(uint256 minAmount) returns (uint256)',
             'function harvestYieldWithDeadline(uint256 minAmount, uint256 deadline) returns (uint256)',
         ], this.signer);
@@ -1544,7 +1544,7 @@ class LayerCoverSDK {
         if (typeof minHarvestAmount !== 'bigint' || minHarvestAmount < 0n) {
             throw new Error('minHarvestAmount must be a bigint >= 0');
         }
-        const syndicate = new ethers_1.Contract(syndicateAddress, [
+        const syndicate = new ethers_v6_1.Contract(syndicateAddress, [
             'function upkeep()',
             'function upkeepWithMinHarvest(uint256 minHarvestAmount, uint256 deadline)',
         ], this.signer);
@@ -1767,7 +1767,7 @@ class LayerCoverSDK {
     }
     _normalizeReferralCode(referralCode) {
         if (!referralCode)
-            return ethers_1.ethers.ZeroHash;
+            return ethers_v6_1.ethers.ZeroHash;
         if (!/^0x[a-fA-F0-9]{64}$/.test(referralCode)) {
             throw new Error('referralCode must be a bytes32 hex string (0x + 64 hex chars)');
         }
@@ -1790,8 +1790,8 @@ class LayerCoverSDK {
     async _ensureContracts() {
         if (this._poolRegistry)
             return;
-        let regAddr = this._poolRegistryAddress || exports.CONTRACT_ADDRESSES[this._chainId]?.poolRegistry || ethers_1.ethers.ZeroAddress;
-        if (regAddr === ethers_1.ethers.ZeroAddress) {
+        let regAddr = this._poolRegistryAddress || exports.CONTRACT_ADDRESSES[this._chainId]?.poolRegistry || ethers_v6_1.ethers.ZeroAddress;
+        if (regAddr === ethers_v6_1.ethers.ZeroAddress) {
             try {
                 regAddr = await this.policyManager.poolRegistry();
             }
@@ -1799,21 +1799,21 @@ class LayerCoverSDK {
                 this._log.warn('[LayerCover SDK] poolRegistry() unavailable:', error?.message || String(error));
             }
         }
-        if (regAddr === ethers_1.ethers.ZeroAddress) {
-            let registryAddr = ethers_1.ethers.ZeroAddress;
+        if (regAddr === ethers_v6_1.ethers.ZeroAddress) {
+            let registryAddr = ethers_v6_1.ethers.ZeroAddress;
             try {
                 registryAddr = await this.policyManager.REGISTRY();
             }
             catch (error) {
                 this._log.warn('[LayerCover SDK] REGISTRY() unavailable:', error?.message || String(error));
             }
-            if (registryAddr !== ethers_1.ethers.ZeroAddress) {
-                const registry = new ethers_1.Contract(registryAddr, [
+            if (registryAddr !== ethers_v6_1.ethers.ZeroAddress) {
+                const registry = new ethers_v6_1.Contract(registryAddr, [
                     'function getPoolRegistry() view returns (address)',
                     'function getPoolAllocations() view returns (address)',
                     'function getRiskManager() view returns (address)'
                 ], this.provider);
-                if (regAddr === ethers_1.ethers.ZeroAddress) {
+                if (regAddr === ethers_v6_1.ethers.ZeroAddress) {
                     try {
                         regAddr = await registry.getPoolRegistry();
                     }
@@ -1823,10 +1823,10 @@ class LayerCoverSDK {
                 }
             }
         }
-        if (regAddr === ethers_1.ethers.ZeroAddress) {
+        if (regAddr === ethers_v6_1.ethers.ZeroAddress) {
             throw new Error(`Failed to resolve PoolRegistry address for chain ${this._chainId}`);
         }
-        this._poolRegistry = new ethers_1.Contract(regAddr, [
+        this._poolRegistry = new ethers_v6_1.Contract(regAddr, [
             'function getPoolStaticData(uint256 poolId) view returns (address token, uint256 sold, bool paused, address feeRecipient, uint256 claimFee, uint8 riskRating, bool useEscrow, bool isYieldRewardPool, uint256 coverageCap, bool usesOptimisticOracle, bytes32 oracleQuestionCID)',
             'function getPoolVaultCoverConfig(uint256 poolId) view returns (address protocolToken, bool usesVaultCover)',
             'function getPoolCoverageCap(uint256 poolId) view returns (uint256)',
@@ -1845,16 +1845,16 @@ class LayerCoverSDK {
         const capitalPoolAddress = await this.policyManager.capitalPool().catch((error) => {
             throw new Error(`Failed to resolve CapitalPool address for chain ${this._chainId}: ${error?.message || String(error)}`);
         });
-        if (!capitalPoolAddress || capitalPoolAddress === ethers_1.ethers.ZeroAddress) {
+        if (!capitalPoolAddress || capitalPoolAddress === ethers_v6_1.ethers.ZeroAddress) {
             throw new Error(`Failed to resolve CapitalPool address for chain ${this._chainId}`);
         }
-        const capitalPool = new ethers_1.Contract(capitalPoolAddress, [
+        const capitalPool = new ethers_v6_1.Contract(capitalPoolAddress, [
             'function asset() view returns (address)',
         ], this.provider);
         const settlementAssetAddress = await capitalPool.asset().catch((error) => {
             throw new Error(`Failed to resolve underwriting asset for chain ${this._chainId}: ${error?.message || String(error)}`);
         });
-        if (!settlementAssetAddress || settlementAssetAddress === ethers_1.ethers.ZeroAddress) {
+        if (!settlementAssetAddress || settlementAssetAddress === ethers_v6_1.ethers.ZeroAddress) {
             throw new Error(`Failed to resolve underwriting asset for chain ${this._chainId}`);
         }
         this._settlementAssetAddress = settlementAssetAddress;
@@ -1866,7 +1866,7 @@ class LayerCoverSDK {
         if (typeof poolRegistry?.getPoolVaultCoverConfig === 'function') {
             try {
                 const [protocolToken] = await poolRegistry.getPoolVaultCoverConfig(poolId);
-                if (protocolToken && protocolToken !== ethers_1.ethers.ZeroAddress) {
+                if (protocolToken && protocolToken !== ethers_v6_1.ethers.ZeroAddress) {
                     return protocolToken;
                 }
             }
@@ -1878,7 +1878,7 @@ class LayerCoverSDK {
             try {
                 const staticData = await poolRegistry.getPoolStaticData(poolId);
                 const tokenAddress = staticData?.protocolTokenToCover || staticData?.token || staticData?.[0];
-                if (tokenAddress && tokenAddress !== ethers_1.ethers.ZeroAddress) {
+                if (tokenAddress && tokenAddress !== ethers_v6_1.ethers.ZeroAddress) {
                     return tokenAddress;
                 }
             }
@@ -1889,7 +1889,7 @@ class LayerCoverSDK {
         return this._getSettlementAssetAddress();
     }
     static _randomUint(bytes) {
-        return ethers_1.ethers.toBigInt(ethers_1.ethers.randomBytes(bytes));
+        return ethers_v6_1.ethers.toBigInt(ethers_v6_1.ethers.randomBytes(bytes));
     }
     // ========================================================================
     // STATIC HELPERS
@@ -1996,7 +1996,7 @@ class LayerCoverSDK {
             if (!nftAddr) {
                 nftAddr = await this.policyManager.policyNFT();
             }
-            this._policyNFT = new ethers_1.Contract(nftAddr, [
+            this._policyNFT = new ethers_v6_1.Contract(nftAddr, [
                 // ERC721 enumeration
                 'function balanceOf(address owner) view returns (uint256)',
                 'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
@@ -2040,7 +2040,7 @@ class LayerCoverSDK {
             status,
         };
         // Include vault cover info if present
-        if (raw.vaultCover && raw.vaultCover.vault !== ethers_1.ethers.ZeroAddress) {
+        if (raw.vaultCover && raw.vaultCover.vault !== ethers_v6_1.ethers.ZeroAddress) {
             policy.vaultCover = {
                 vault: raw.vaultCover.vault,
                 sharesInsured: raw.vaultCover.sharesInsured.toString(),
@@ -2081,7 +2081,7 @@ class LayerCoverSDK {
                         premiumDeposit: p.premiumDeposit || '0',
                         fixedRateBps: Number(p.intent?.fixedRateBps || 0),
                         endTimestamp: Number(p.intent?.endTime || 0),
-                        underwriter: p.intent?.underwriter || ethers_1.ethers.ZeroAddress,
+                        underwriter: p.intent?.underwriter || ethers_v6_1.ethers.ZeroAddress,
                         cancellationPenaltyBps: 0,
                         isActive: Boolean(p.isActive),
                         status: p.isActive ? 'active' : 'expired',

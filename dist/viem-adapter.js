@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ViemAdapter = void 0;
-const ethers_1 = require("ethers-v6");
+const ethers_v6_1 = require("ethers-v6");
 /**
  * Adapter to use viem/wagmi clients with the LayerCover SDK.
  *
@@ -28,7 +28,7 @@ class ViemAdapter {
             throw new Error('Invalid WalletClient: missing transport. Did you pass a PublicClient instead?');
         }
         // viem WalletClient exposes an EIP-1193 provider via its transport
-        const provider = new ethers_1.BrowserProvider(walletClient.transport, {
+        const provider = new ethers_v6_1.BrowserProvider(walletClient.transport, {
             chainId: walletClient.chain?.id,
             name: walletClient.chain?.name || 'unknown',
         });
@@ -40,7 +40,7 @@ class ViemAdapter {
         // Return a signer bound to that address
         // We use a synchronous approach by using getSigner() result directly 
         // since BrowserProvider wraps EIP-1193 which is already connected
-        return new ethers_1.JsonRpcSigner(provider, address);
+        return new ethers_v6_1.JsonRpcSigner(provider, address);
     }
     /**
      * Creates an ethers v6 JsonRpcProvider from a viem PublicClient.
@@ -56,13 +56,13 @@ class ViemAdapter {
         const transport = publicClient.transport;
         // If the transport has a URL (http transport), use JsonRpcProvider
         if (transport.url) {
-            return new ethers_1.JsonRpcProvider(transport.url, {
+            return new ethers_v6_1.JsonRpcProvider(transport.url, {
                 chainId: publicClient.chain?.id,
                 name: publicClient.chain?.name || 'unknown',
             });
         }
         // Otherwise wrap EIP-1193 transport (e.g. custom, fallback)
-        return new ethers_1.BrowserProvider(transport, {
+        return new ethers_v6_1.BrowserProvider(transport, {
             chainId: publicClient.chain?.id,
             name: publicClient.chain?.name || 'unknown',
         });
@@ -80,11 +80,11 @@ class ViemAdapter {
         if (!account?.address) {
             throw new Error('Invalid account: missing address.');
         }
-        const provider = new ethers_1.BrowserProvider(transport, chain ? {
+        const provider = new ethers_v6_1.BrowserProvider(transport, chain ? {
             chainId: chain.id,
             name: chain.name || 'unknown',
         } : undefined);
-        return new ethers_1.JsonRpcSigner(provider, account.address);
+        return new ethers_v6_1.JsonRpcSigner(provider, account.address);
     }
 }
 exports.ViemAdapter = ViemAdapter;

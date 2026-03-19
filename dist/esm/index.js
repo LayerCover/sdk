@@ -87,9 +87,9 @@ export const CONTRACT_ADDRESSES = {
     },
     // Avalanche Fuji (testnet)
     43113: {
-        policyManager: '0xe2fC6C13ABd4FdD8656F4e3985Bf3481aA586dce',
-        intentOrderBook: '0x221e12F38Be3d1C49Ac126fa739a402652cc18aE',
-        poolRegistry: '0xAE2273A1c40f2b8449463752Ce4a0445F3DA502C',
+        policyManager: '0x573e39aB7edfD840778C131d49AE89968bC53C0A',
+        intentOrderBook: '0x67e456aa9b976FD75398d94C3Be17FBb55c865ab',
+        poolRegistry: '0xDddF32B1e6406D090B35edf770c90A18D55E75fb',
     },
     // Ethereum Sepolia (testnet)
     11155111: {
@@ -124,9 +124,9 @@ export const DEPLOYMENT_FALLBACK_CONFIGS = {
     avalanche_fuji_usdc: {
         chainId: 43113,
         contracts: {
-            policyManager: '0xe2fC6C13ABd4FdD8656F4e3985Bf3481aA586dce',
-            intentOrderBook: '0x221e12F38Be3d1C49Ac126fa739a402652cc18aE',
-            poolRegistry: '0xAE2273A1c40f2b8449463752Ce4a0445F3DA502C',
+            policyManager: '0x573e39aB7edfD840778C131d49AE89968bC53C0A',
+            intentOrderBook: '0x67e456aa9b976FD75398d94C3Be17FBb55c865ab',
+            poolRegistry: '0xDddF32B1e6406D090B35edf770c90A18D55E75fb',
         },
     },
     ethereum_sepolia_usdc: {

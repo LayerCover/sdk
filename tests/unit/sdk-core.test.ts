@@ -21,9 +21,18 @@ import { Wallet, JsonRpcProvider } from 'ethers-v6';
 import fs from 'node:fs';
 
 function loadDeploymentJson(network: string, instance = 'usdc') {
-    return JSON.parse(
-        fs.readFileSync(new URL(`../../../contracts/deployments/${network}/${instance}.json`, import.meta.url), 'utf8')
-    );
+    const candidates = [
+        new URL(`../../../monorepo/packages/contracts/deployments/${network}/${instance}.json`, import.meta.url),
+        new URL(`../../../docs-site/packages/contracts/deployments/${network}/${instance}.json`, import.meta.url),
+    ];
+
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        }
+    }
+
+    throw new Error(`Deployment manifest not found for ${network}/${instance}.json`);
 }
 
 // ──────────────────────────────────────────────────────────────

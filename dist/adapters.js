@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.EthersV5Adapter = void 0;
-const ethers_1 = require("ethers-v6");
+const ethers_v6_1 = require("ethers-v6");
 /**
  * Helpers to adapt Ethers v5 objects to Ethers v6 for SDK compatibility.
  */
@@ -14,7 +14,7 @@ class EthersV5Adapter {
     static fromWeb3Provider(v5Provider) {
         // In v5 Web3Provider, the underlying EIP-1193 provider is at .provider
         const externalProvider = v5Provider.provider || v5Provider;
-        return new ethers_1.BrowserProvider(externalProvider);
+        return new ethers_v6_1.BrowserProvider(externalProvider);
     }
     /**
      * Creates a v6 JsonRpcProvider from an Ethers v5 JsonRpcProvider.
@@ -26,7 +26,7 @@ class EthersV5Adapter {
         const url = v5Provider.connection?.url || v5Provider._getConnection()?.url;
         if (!url)
             throw new Error("Could not extract URL from v5 Provider");
-        return new ethers_1.JsonRpcProvider(url);
+        return new ethers_v6_1.JsonRpcProvider(url);
     }
     /**
      * Creates a v6 JsonRpcSigner from an Ethers v5 Signer.

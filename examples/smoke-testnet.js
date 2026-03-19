@@ -12,7 +12,7 @@
  *   PRIVATE_KEY=0x... node examples/smoke-testnet.js --execute --pool-id=1 --amount-usdc=25 --weeks=4
  */
 
-const { ethers } = require('ethers');
+const { ethers } = require('ethers-v6');
 const { LayerCoverSDK } = require('../dist/index.js');
 
 const DEFAULTS = {
@@ -29,6 +29,7 @@ const DEFAULTS = {
     retryDelayMs: Number(process.env.RETRY_DELAY_MS || 300),
     txConfirmations: Number(process.env.TX_CONFIRMATIONS || 1),
     txWaitTimeoutMs: Number(process.env.TX_WAIT_TIMEOUT_MS || 180000),
+    autoPool: process.env.AUTO_POOL === '1' || process.env.AUTO_POOL === 'true',
 };
 
 function parseArgs(argv) {
@@ -36,6 +37,7 @@ function parseArgs(argv) {
         dryRun: true,
         execute: false,
         help: false,
+        autoPool: DEFAULTS.autoPool,
     };
 
     for (const arg of argv) {
@@ -52,6 +54,7 @@ function parseArgs(argv) {
         else if (arg.startsWith('--api-base-url=')) args.apiBaseUrl = arg.split('=').slice(1).join('=');
         else if (arg.startsWith('--deployment=')) args.deployment = arg.split('=').slice(1).join('=');
         else if (arg.startsWith('--chain-id=')) args.chainId = Number(arg.split('=')[1]);
+        else if (arg === '--auto-pool') args.autoPool = true;
     }
 
     return { ...DEFAULTS, ...args };
@@ -77,6 +80,7 @@ Options:
   --api-base-url=<url>  API base URL (default from API_BASE_URL or ${DEFAULTS.apiBaseUrl})
   --deployment=<name>   Deployment (default: ${DEFAULTS.deployment})
   --chain-id=<n>        Chain ID (default: ${DEFAULTS.chainId})
+  --auto-pool           If the requested pool has no active quotes, try the first pool that does.
 
 Environment:
   PRIVATE_KEY           Required only for --execute
@@ -163,29 +167,49 @@ async function main() {
     }
     console.log(`✓ Pools discovered: ${pools.length}`);
 
-    const pool = pools.find((p) => p.poolId === cfg.poolId);
+    let selectedPoolId = cfg.poolId;
+    let pool = pools.find((p) => p.poolId === selectedPoolId);
     if (!pool) {
-        throw new Error(`Pool ${cfg.poolId} not found in discovered pools`);
+        throw new Error(`Pool ${selectedPoolId} not found in discovered pools`);
     }
     console.log(`✓ Pool found: ${pool.name} (${pool.category})`);
 
     console.log('\n[2/4] getBestRate(poolId)');
-    const bestRateBps = await sdk.getBestRate(cfg.poolId);
+    let bestRateBps = await sdk.getBestRate(selectedPoolId);
+    let searchedQuotedPool = false;
+    if (bestRateBps == null && cfg.autoPool && !cfg.execute) {
+        searchedQuotedPool = true;
+        console.log(`• Pool ${selectedPoolId} has no active quotes, searching for a quoted pool...`);
+        for (const candidate of pools) {
+            const candidateRate = await sdk.getBestRate(candidate.poolId);
+            if (candidateRate != null) {
+                selectedPoolId = candidate.poolId;
+                pool = candidate;
+                bestRateBps = candidateRate;
+                console.log(`✓ Switched to pool ${selectedPoolId}: ${pool.name} (${pool.category})`);
+                break;
+            }
+        }
+    }
     if (bestRateBps == null) {
-        throw new Error(`No active quotes available for pool ${cfg.poolId}`);
+        if (searchedQuotedPool) {
+            throw new Error(`No active quotes available on deployment ${cfg.deployment}`);
+        }
+        throw new Error(`No active quotes available for pool ${selectedPoolId}`);
     }
     console.log(`✓ Best active rate: ${bestRateBps} bps (${(bestRateBps / 100).toFixed(2)}%)`);
 
     console.log('\n[3/4] purchase prechecks');
-    const quotes = await sdk.getActiveQuotes(cfg.poolId);
+    const quotes = await sdk.getActiveQuotes(selectedPoolId);
     if (quotes.length === 0) {
-        throw new Error(`No active quotes available for pool ${cfg.poolId}`);
+        throw new Error(`No active quotes available for pool ${selectedPoolId}`);
     }
     const bestQuote = quotes[0];
     const amount = ethers.parseUnits(String(cfg.amountUsdc), 6);
     const durationSeconds = cfg.weeks * 7 * 24 * 60 * 60;
     const premium = sdk.calculatePremium(amount, bestQuote.premiumRateBps, durationSeconds);
     console.log(`✓ Selected quote: ${bestQuote.id} @ ${bestQuote.premiumRateBps} bps`);
+    console.log(`✓ Selected pool: ${selectedPoolId} (${pool.name})`);
     console.log(`✓ Est premium: ${fmt(premium)} USDC`);
     console.log(`✓ Quote path: ${bestQuote.orderId !== undefined && bestQuote.orderId !== null ? 'on-chain order' : 'intent flow'}`);
 
@@ -200,7 +224,7 @@ async function main() {
         throw new Error('Signer is required for execute mode');
     }
 
-    const result = await sdk.purchase(cfg.poolId, amount, cfg.weeks, cfg.maxRateBps);
+    const result = await sdk.purchase(selectedPoolId, amount, cfg.weeks, cfg.maxRateBps);
     console.log('✓ Purchase submitted');
     console.log(`  Tx hash:   ${result.txHash}`);
     if (result.policyId) console.log(`  Policy ID: ${result.policyId}`);
