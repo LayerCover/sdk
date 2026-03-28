@@ -212,7 +212,7 @@ describe('getFixedRateQuotes', () => {
     it('fetches quotes sorted by rate', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ quotes: mockQuotes }),
+            json: async () => ({ quotes: { '1': mockQuotes } }),
         });
 
         const sdk = createMockSDK();
@@ -231,6 +231,11 @@ describe('getFixedRateQuotes', () => {
             status: 404,
             statusText: 'Not Found',
         });
+        fetchMock.mockResolvedValueOnce({
+            ok: false,
+            status: 404,
+            statusText: 'Not Found',
+        });
 
         const sdk = createMockSDK();
         await expect(sdk.getFixedRateQuotes(1)).rejects.toThrow('Failed to fetch quotes');
@@ -239,7 +244,7 @@ describe('getFixedRateQuotes', () => {
     it('handles empty quotes', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ quotes: [] }),
+            json: async () => ({ quotes: { '1': [] } }),
         });
 
         const sdk = createMockSDK();
@@ -250,7 +255,7 @@ describe('getFixedRateQuotes', () => {
     it('URL-encodes deployment when fetching quotes', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ quotes: [] }),
+            json: async () => ({ quotes: { '1': [] } }),
         });
 
         const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
@@ -262,6 +267,7 @@ describe('getFixedRateQuotes', () => {
         await sdk.getFixedRateQuotes(1);
 
         const calledUrl = String(fetchMock.mock.calls[0]?.[0] || '');
+        expect(calledUrl).toContain('/api/quotes/batch?poolIds=1');
         expect(calledUrl).toContain('deployment=test%2Fdeployment%20value');
     });
 });
@@ -274,7 +280,7 @@ describe('getActiveQuotes', () => {
     it('filters out expired quotes', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ quotes: mockQuotes }),
+            json: async () => ({ quotes: { '1': mockQuotes } }),
         });
 
         const sdk = createMockSDK();
@@ -294,7 +300,7 @@ describe('getBestRate', () => {
     it('returns lowest rate', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ quotes: mockQuotes }),
+            json: async () => ({ quotes: { '1': mockQuotes } }),
         });
 
         const sdk = createMockSDK();
@@ -305,7 +311,7 @@ describe('getBestRate', () => {
     it('returns null when no quotes', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ quotes: [] }),
+            json: async () => ({ quotes: { '1': [] } }),
         });
 
         const sdk = createMockSDK();
@@ -315,17 +321,11 @@ describe('getBestRate', () => {
 });
 
 describe('validation guards', () => {
-    it('rejects refreshQuote with invalid amount before network call', async () => {
-        const sdk = createMockSDK();
-        await expect(sdk.refreshQuote('q1', 0n, 604800)).rejects.toThrow('amount must be > 0');
-        expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('prepareBuyFromQuoteTx is deprecated on current contracts', async () => {
+    it('prepareBuyFromQuoteTx validates referral codes before building direct purchases', async () => {
         const sdk = createMockSDK();
         await expect(
             sdk.prepareBuyFromQuoteTx(1, 1n, 604800, 'not-a-bytes32')
-        ).rejects.toThrow('prepareBuyFromQuoteTx is deprecated');
+        ).rejects.toThrow('referralCode must be a bytes32');
     });
 
     it('rejects watchQuotes with invalid interval', () => {
@@ -355,49 +355,6 @@ describe('validation guards', () => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// refreshQuote
-// ──────────────────────────────────────────────────────────────
-
-describe('refreshQuote', () => {
-    it('requires a signer (throws without one)', async () => {
-        const sdk = createMockSDK(); // provider-only, no signer
-        await expect(sdk.refreshQuote('q1', 1000000n, 604800)).rejects.toThrow(
-            'Signer required for quote refresh'
-        );
-        expect(fetchMock).not.toHaveBeenCalled();
-    });
-});
-
-// ──────────────────────────────────────────────────────────────
-// cancelQuote
-// ──────────────────────────────────────────────────────────────
-
-describe('cancelQuote', () => {
-    it('sends DELETE request', async () => {
-        fetchMock.mockResolvedValueOnce({ ok: true });
-
-        const sdk = createMockSDK();
-        const result = await sdk.cancelQuote('q1');
-        expect(result).toBe(true);
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('quoteId=q1'),
-            expect.objectContaining({ method: 'DELETE' })
-        );
-    });
-
-    it('throws on HTTP error', async () => {
-        fetchMock.mockResolvedValueOnce({
-            ok: false,
-            status: 404,
-            json: async () => ({ error: 'Quote not found' }),
-        });
-
-        const sdk = createMockSDK();
-        await expect(sdk.cancelQuote('q999')).rejects.toThrow('Quote not found');
-    });
-});
-
-// ──────────────────────────────────────────────────────────────
 // getSyndicateQuotes
 // ──────────────────────────────────────────────────────────────
 
@@ -405,7 +362,11 @@ describe('getSyndicateQuotes', () => {
     it('fetches quotes for a syndicate', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ quotes: [mockQuotes[0]] }),
+            json: async () => ({ pools: mockPools }),
+        });
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ quotes: { '1': mockQuotes, '2': [] } }),
         });
 
         const sdk = createMockSDK();
@@ -423,19 +384,27 @@ describe('getSyndicateExposure', () => {
     it('fetches exposure data', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({ totalExposure: '2000000', activeQuoteCount: 5 }),
+            json: async () => ({ pools: mockPools }),
+        });
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ quotes: { '1': mockQuotes, '2': [] } }),
         });
 
         const sdk = createMockSDK();
         const exposure = await sdk.getSyndicateExposure('0xaaa');
-        expect(exposure.totalExposure).toBe('2000000');
-        expect(exposure.activeQuoteCount).toBe(5);
+        expect(exposure.totalExposure).toBe('500000');
+        expect(exposure.activeQuoteCount).toBe(1);
     });
 
     it('defaults to 0 for missing fields', async () => {
         fetchMock.mockResolvedValueOnce({
             ok: true,
-            json: async () => ({}),
+            json: async () => ({ pools: mockPools }),
+        });
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ quotes: { '1': [], '2': [] } }),
         });
 
         const sdk = createMockSDK();
@@ -698,5 +667,31 @@ describe('LayerCoverSDK.create cache behavior', () => {
         });
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('forwards onEvent hooks through create()', async () => {
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+                contracts: {
+                    policyManager: '0x7777777777777777777777777777777777777777',
+                    intentOrderBook: '0x8888888888888888888888888888888888888888',
+                },
+                chainId: 84532,
+                deployment: 'dep_events',
+                apiBaseUrl: 'https://test.layercover.com',
+            }),
+        });
+
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const onEvent = vi.fn();
+        const sdk = await LayerCoverSDK.create(provider, {
+            apiBaseUrl: 'https://test.layercover.com',
+            chainId: 84532,
+            deployment: 'dep_events',
+            onEvent,
+        });
+
+        expect((sdk as any)._onEvent).toBe(onEvent);
     });
 });

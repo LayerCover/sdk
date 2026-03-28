@@ -1,4 +1,4 @@
-import { LayerCoverSDK, FixedRateQuote, PurchaseResult, CoveragePool } from '../../index';
+import { LayerCoverSDK, FixedRateQuote, PurchaseResult, CoveragePool, PreparedPurchase } from '../../index';
 import type { Signer, Provider } from 'ethers-v6';
 export interface UseLayerCoverOptions {
     /** Ethers v6 signer (for purchases) or provider (for read-only) */
@@ -36,6 +36,8 @@ export interface UseLayerCoverResult {
     fetchQuotes: () => Promise<void>;
     /** Calculate premium for given amount and duration */
     calculatePremium: (amount: string, durationWeeks: number) => bigint | null;
+    /** Prepare approval/purchase transactions and blocker metadata */
+    preparePurchase: (amount: string, durationWeeks: number) => Promise<PreparedPurchase | null>;
     /** Purchase coverage */
     purchase: (amount: string, durationWeeks: number, onApprove?: () => void, onPurchase?: () => void) => Promise<PurchaseResult | null>;
     txStatus: string;

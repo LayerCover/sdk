@@ -2,7 +2,14 @@
  * Unit tests for error translation (getHumanError)
  */
 import { describe, it, expect } from 'vitest';
-import { getHumanError, ERROR_MESSAGES } from '../../src/errors';
+import {
+    getHumanError,
+    ERROR_MESSAGES,
+    PurchaseBlockedError,
+    QuoteStaleError,
+    SignerRequiredError,
+    ChainMismatchError,
+} from '../../src/errors';
 
 describe('ERROR_MESSAGES', () => {
     it('contains known error selectors', () => {
@@ -64,6 +71,34 @@ describe('getHumanError', () => {
         expect(msg).toContain('avalanche_fuji_usdc');
     });
 
+    it('formats typed purchase blocked errors', () => {
+        const err = new PurchaseBlockedError('blocked', [
+            { code: 'AMOUNT_BELOW_MIN_FILL', message: 'Quote requires more size.', quoteId: 'quote-1' },
+        ]);
+        expect(getHumanError(err)).toContain('Quote requires more size.');
+    });
+
+    it('formats typed stale quote errors', () => {
+        const err = new QuoteStaleError('stale', 'quote-1', 30_000, 45_000);
+        expect(getHumanError(err)).toContain('stale');
+    });
+
+    it('formats typed signer required errors', () => {
+        const err = new SignerRequiredError();
+        expect(getHumanError(err)).toContain('Wallet connection required');
+    });
+
+    it('formats typed chain mismatch errors', () => {
+        const err = new ChainMismatchError(
+            'Chain mismatch',
+            11155111,
+            1,
+            'ethereum_sepolia_usdc'
+        );
+        expect(getHumanError(err)).toContain('Ethereum Sepolia');
+        expect(getHumanError(err)).toContain('ethereum_sepolia_usdc');
+    });
+
     it('returns generic message for unknown errors', () => {
         const err = { message: 'something completely unexpected happened xyz123' };
         const msg = getHumanError(err);
@@ -72,7 +107,7 @@ describe('getHumanError', () => {
 
     it('handles string error', () => {
         const msg = getHumanError('simple string error');
-        expect(msg.length).toBeGreaterThan(0);
+        expect(msg).toBe('simple string error');
     });
 
     it('handles null/undefined gracefully', () => {

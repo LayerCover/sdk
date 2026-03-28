@@ -60,8 +60,80 @@ export const ERROR_MESSAGES: Record<string, string> = {
 const CHAIN_DISPLAY_NAMES: Record<number, string> = {
     31337: 'Localhost',
     43113: 'Avalanche Fuji',
+    11155111: 'Ethereum Sepolia',
     84532: 'Base Sepolia',
 };
+
+export interface PurchaseBlockerLike {
+    code: string;
+    message: string;
+    quoteId?: string;
+}
+
+export class LayerCoverSDKError extends Error {
+    code: string;
+    cause?: unknown;
+
+    constructor(message: string, code = 'SDK_ERROR', options: { cause?: unknown } = {}) {
+        super(message);
+        this.name = new.target.name;
+        this.code = code;
+        this.cause = options.cause;
+    }
+}
+
+export class PurchaseBlockedError extends LayerCoverSDKError {
+    blockers: PurchaseBlockerLike[];
+
+    constructor(message: string, blockers: PurchaseBlockerLike[], options: { cause?: unknown } = {}) {
+        super(message, 'PURCHASE_BLOCKED', options);
+        this.blockers = blockers;
+    }
+}
+
+export class QuoteStaleError extends LayerCoverSDKError {
+    quoteId: string;
+    maxAgeMs: number;
+    quoteAgeMs: number | null;
+
+    constructor(
+        message: string,
+        quoteId: string,
+        maxAgeMs: number,
+        quoteAgeMs: number | null,
+        options: { cause?: unknown } = {}
+    ) {
+        super(message, 'QUOTE_STALE', options);
+        this.quoteId = quoteId;
+        this.maxAgeMs = maxAgeMs;
+        this.quoteAgeMs = quoteAgeMs;
+    }
+}
+
+export class SignerRequiredError extends LayerCoverSDKError {
+    constructor(message = 'A signer is required for this operation.', options: { cause?: unknown } = {}) {
+        super(message, 'SIGNER_REQUIRED', options);
+    }
+}
+
+export class ChainMismatchError extends LayerCoverSDKError {
+    expectedChainId: number;
+    connectedChainId: number;
+    expectedDeployment?: string;
+
+    constructor(
+        message: string,
+        expectedChainId: number,
+        connectedChainId: number,
+        expectedDeployment?: string,
+        options: { cause?: unknown } = {}
+    ) {
+        super(message, 'CHAIN_MISMATCH', options);
+        this.expectedChainId = expectedChainId;
+        this.connectedChainId = connectedChainId;
+        this.expectedDeployment = expectedDeployment;
+    }
+}
 
 function getExpectedChainId(error: any): number | null {
     if (typeof error?.expectedChainId === 'number' && Number.isFinite(error.expectedChainId)) {
@@ -96,6 +168,30 @@ function getExpectedDeployment(error: any): string | null {
  */
 export function getHumanError(error: any): string {
     if (!error) return 'An unknown error occurred.';
+    if (typeof error === 'string') return error;
+
+    if (error instanceof PurchaseBlockedError) {
+        return error.blockers.length > 0
+            ? error.blockers.map((blocker) => blocker.message).join(' ')
+            : error.message;
+    }
+    if (error instanceof QuoteStaleError) {
+        return 'The selected quote is stale. Refresh quotes and try again.';
+    }
+    if (error instanceof SignerRequiredError) {
+        return 'Wallet connection required. Connect a signer to continue.';
+    }
+    if (error instanceof ChainMismatchError) {
+        const chainLabel = CHAIN_DISPLAY_NAMES[error.expectedChainId] || null;
+
+        if (chainLabel && error.expectedDeployment) {
+            return `Wrong network. Please switch to ${chainLabel} (${error.expectedDeployment}) in your wallet.`;
+        }
+        if (chainLabel) {
+            return `Wrong network. Please switch to ${chainLabel} (chain ${error.expectedChainId}) in your wallet.`;
+        }
+        return `Wrong network. Please switch to chain ${error.expectedChainId} in your wallet.`;
+    }
 
     // ── User rejection ─────────────────────────────────────────────────
     if (error?.code === 'ACTION_REJECTED' ||

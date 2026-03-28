@@ -7,6 +7,8 @@ import {
     LayerCoverSDK,
     RateTooHighError,
     NoQuotesAvailableError,
+    PurchaseBlockedError,
+    QuoteStaleError,
     CONTRACT_ADDRESSES,
     DEPLOYMENT_FALLBACK_CONFIGS,
     POOL_CONFIG,
@@ -17,22 +19,24 @@ import {
     getIntentOrderBookAddress,
     getTokenLogoUrl,
 } from '../../src/index';
-import { Wallet, JsonRpcProvider } from 'ethers-v6';
+import { Wallet, JsonRpcProvider, Interface, AbiCoder } from 'ethers-v6';
 import fs from 'node:fs';
 
-function loadDeploymentJson(network: string, instance = 'usdc') {
+function loadDeploymentJsonCandidates(network: string, instance = 'usdc') {
     const candidates = [
         new URL(`../../../monorepo/packages/contracts/deployments/${network}/${instance}.json`, import.meta.url),
         new URL(`../../../docs-site/packages/contracts/deployments/${network}/${instance}.json`, import.meta.url),
     ];
 
-    for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) {
-            return JSON.parse(fs.readFileSync(candidate, 'utf8'));
-        }
-    }
+    return candidates
+        .filter((candidate) => fs.existsSync(candidate))
+        .map((candidate) => JSON.parse(fs.readFileSync(candidate, 'utf8')));
+}
 
-    throw new Error(`Deployment manifest not found for ${network}/${instance}.json`);
+function loadPolicyNftAbi() {
+    const candidate = new URL('../../../subgraph/abis/PolicyNFT.json', import.meta.url);
+    const artifact = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+    return artifact.abi ?? artifact;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -40,8 +44,8 @@ function loadDeploymentJson(network: string, instance = 'usdc') {
 // ──────────────────────────────────────────────────────────────
 
 describe('Constants', () => {
-    it('DEFAULT_CHAIN_ID is Base Sepolia (84532)', () => {
-        expect(DEFAULT_CHAIN_ID).toBe(84532);
+    it('DEFAULT_CHAIN_ID is Ethereum Sepolia (11155111)', () => {
+        expect(DEFAULT_CHAIN_ID).toBe(11155111);
     });
 
     it('DEFAULT_API_BASE_URL is app.layercover.com', () => {
@@ -64,12 +68,16 @@ describe('Constants', () => {
         ];
 
         for (const { chainId, network } of chainExpectations) {
-            const deployment = loadDeploymentJson(network);
-            expect(CONTRACT_ADDRESSES[chainId]).toEqual({
-                policyManager: deployment.PolicyManager,
-                intentOrderBook: deployment.IntentMatcher,
-                poolRegistry: deployment.PoolRegistry,
-            });
+            const candidates = loadDeploymentJsonCandidates(network);
+            const actual = CONTRACT_ADDRESSES[chainId];
+
+            expect(
+                candidates.some((deployment) =>
+                    actual.policyManager === deployment.PolicyManager
+                    && actual.intentOrderBook === deployment.IntentMatcher
+                    && actual.poolRegistry === deployment.PoolRegistry
+                )
+            ).toBe(true);
         }
     });
 
@@ -83,15 +91,17 @@ describe('Constants', () => {
         ];
 
         for (const { name, network, instance = 'usdc', chainId } of deploymentExpectations) {
-            const deployment = loadDeploymentJson(network, instance);
-            expect(DEPLOYMENT_FALLBACK_CONFIGS[name]).toEqual({
-                chainId,
-                contracts: {
-                    policyManager: deployment.PolicyManager,
-                    intentOrderBook: deployment.IntentMatcher,
-                    poolRegistry: deployment.PoolRegistry,
-                },
-            });
+            const candidates = loadDeploymentJsonCandidates(network, instance);
+            const actual = DEPLOYMENT_FALLBACK_CONFIGS[name];
+
+            expect(
+                candidates.some((deployment) =>
+                    actual.chainId === chainId
+                    && actual.contracts.policyManager === deployment.PolicyManager
+                    && actual.contracts.intentOrderBook === deployment.IntentMatcher
+                    && actual.contracts.poolRegistry === deployment.PoolRegistry
+                )
+            ).toBe(true);
         }
     });
 
@@ -186,6 +196,435 @@ describe('runtime compatibility helpers', () => {
 
         await expect((sdk as any)._getCoveredTokenAddress(9)).resolves.toBe(legacyToken);
         expect(poolRegistry.getPoolStaticData).toHaveBeenCalledWith(9);
+    });
+
+    it('prepareBuyFromQuoteTx encodes a PurchaseGateway buy request', async () => {
+        const sdk = createSdk();
+        const purchaseGatewayAddress = '0x' + '55'.repeat(20);
+        (sdk as any)._resolvePurchaseGatewayAddress = vi.fn().mockResolvedValue(purchaseGatewayAddress);
+
+        const referralCode = '0x' + '11'.repeat(32);
+        const tx = await sdk.prepareBuyFromQuoteTx(7, 1234n, 604800, referralCode);
+
+        expect(tx.to).toBe(purchaseGatewayAddress);
+        expect(typeof tx.data).toBe('string');
+
+        const gatewayIface = new Interface(['function buy(bytes purchaseRequest) returns (uint256)']);
+        const parsed = gatewayIface.parseTransaction({ data: String(tx.data), value: 0n });
+        expect(parsed?.name).toBe('buy');
+
+        const [request] = AbiCoder.defaultAbiCoder().decode(
+            ['tuple(uint256 quoteId, uint256 coverageAmount, uint64 duration, bytes32 referralCode, address vault, uint256 sharesToCover, bytes extensionData)'],
+            parsed?.args?.[0]
+        );
+        expect(request.quoteId).toBe(7n);
+        expect(request.coverageAmount).toBe(1234n);
+        expect(request.duration).toBe(604800n);
+        expect(request.referralCode).toBe(referralCode);
+    });
+
+    it('getBestExecutableQuote skips quotes that cannot fill the request', async () => {
+        const sdk = createSdk();
+        vi.spyOn(sdk, 'getActiveQuotes').mockResolvedValue([
+            {
+                id: 'quote-a',
+                poolId: 1,
+                syndicateAddress: '0x' + '22'.repeat(20),
+                syndicateName: 'Alpha',
+                coverageAmount: '1000000',
+                premiumRateBps: 300,
+                minDurationWeeks: 1,
+                maxDurationWeeks: 12,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+                quoteBookQuoteId: '7',
+                quoteSource: 'quotebook',
+                minFillAmount: '500',
+            },
+            {
+                id: 'quote-b',
+                poolId: 1,
+                syndicateAddress: '0x' + '33'.repeat(20),
+                syndicateName: 'Beta',
+                coverageAmount: '1000000',
+                premiumRateBps: 325,
+                minDurationWeeks: 1,
+                maxDurationWeeks: 12,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+                quoteBookQuoteId: '8',
+                quoteSource: 'quotebook',
+                minFillAmount: '0',
+            },
+        ]);
+
+        const quote = await sdk.getBestExecutableQuote(1, 100n, 4);
+        expect(quote?.id).toBe('quote-b');
+    });
+
+    it('preparePurchase returns transactions and approval state for executable quotes', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const onEvent = vi.fn();
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+            onEvent,
+        });
+        const quote = {
+            id: 'quote-1',
+            poolId: 1,
+            syndicateAddress: '0x' + '22'.repeat(20),
+            syndicateName: 'Alpha',
+            coverageAmount: '1000000',
+            premiumRateBps: 300,
+            minDurationWeeks: 1,
+            maxDurationWeeks: 12,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            status: 'active' as const,
+            quoteBookQuoteId: '7',
+            quoteSource: 'quotebook',
+            minFillAmount: '250',
+        };
+
+        vi.spyOn(sdk, 'getActiveQuotes').mockResolvedValue([quote]);
+        vi.spyOn(sdk, 'prepareBuyFromQuoteTx').mockResolvedValue({ to: '0x' + '44'.repeat(20), data: '0x1234' });
+        vi.spyOn(sdk, 'prepareApprovalTx').mockResolvedValue({ to: '0x' + '55'.repeat(20), data: '0x5678' });
+        (sdk as any)._previewDirectQuoteBookPurchase = vi.fn().mockResolvedValue({
+            purchaseGatewayAddress: '0x' + '66'.repeat(20),
+            paymentTokenAddress: '0x' + '77'.repeat(20),
+            premiumDeposit: 123n,
+            requiresUpfront: true,
+        });
+        (sdk as any)._getTokenAllowance = vi.fn().mockResolvedValue(0n);
+        (sdk as any)._assertConfiguredChain = vi.fn();
+
+        const preparation = await sdk.preparePurchase(1, 500n, 4, undefined, '0x' + '11'.repeat(32));
+
+        expect(preparation.status).toBe('approval_required');
+        expect(preparation.blockers).toEqual([]);
+        expect(preparation.quote?.id).toBe('quote-1');
+        expect(preparation.premiumDeposit).toBe(123n);
+        expect(preparation.approvalNeeded).toBe(true);
+        expect(preparation.approvalTx?.to).toBe('0x' + '55'.repeat(20));
+        expect(preparation.purchaseTx?.to).toBe('0x' + '44'.repeat(20));
+        expect(preparation.minFillAmount).toBe(250n);
+        expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'purchase_prepared',
+        }));
+    });
+
+    it('preparePurchaseFromQuote preserves the selected quote even when cheaper quotes exist', async () => {
+        const sdk = createSdk();
+        const selectedQuote = {
+            id: 'quote-selected',
+            poolId: 1,
+            syndicateAddress: '0x' + '22'.repeat(20),
+            syndicateName: 'Selected',
+            coverageAmount: '1000000',
+            premiumRateBps: 350,
+            minDurationWeeks: 1,
+            maxDurationWeeks: 12,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            status: 'active' as const,
+            quoteBookQuoteId: '9',
+            quoteSource: 'quotebook',
+            minFillAmount: '0',
+        };
+
+        vi.spyOn(sdk, 'prepareBuyFromQuoteTx').mockResolvedValue({ to: '0x' + '44'.repeat(20), data: '0x1234' });
+        vi.spyOn(sdk, 'prepareApprovalTx').mockResolvedValue({ to: '0x' + '55'.repeat(20), data: '0x5678' });
+        (sdk as any)._previewDirectQuoteBookPurchase = vi.fn().mockResolvedValue({
+            purchaseGatewayAddress: '0x' + '66'.repeat(20),
+            paymentTokenAddress: '0x' + '77'.repeat(20),
+            premiumDeposit: 88n,
+            requiresUpfront: true,
+        });
+
+        const preparation = await sdk.preparePurchaseFromQuote(selectedQuote, 500n, 4);
+
+        expect(preparation.status).toBe('signer_required');
+        expect(preparation.quote?.id).toBe('quote-selected');
+        expect(preparation.purchaseTx?.to).toBe('0x' + '44'.repeat(20));
+    });
+
+    it('preparePurchase returns structured blockers when no quote is executable', async () => {
+        const onEvent = vi.fn();
+        const sdk = new LayerCoverSDK(new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true }), '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+            onEvent,
+        });
+        vi.spyOn(sdk, 'getActiveQuotes').mockResolvedValue([
+            {
+                id: 'quote-a',
+                poolId: 1,
+                syndicateAddress: '0x' + '22'.repeat(20),
+                syndicateName: 'Alpha',
+                coverageAmount: '50',
+                premiumRateBps: 250,
+                minDurationWeeks: 1,
+                maxDurationWeeks: 52,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+                quoteBookQuoteId: '7',
+                quoteSource: 'quotebook',
+                minFillAmount: '0',
+            },
+            {
+                id: 'quote-b',
+                poolId: 1,
+                syndicateAddress: '0x' + '33'.repeat(20),
+                syndicateName: 'Beta',
+                coverageAmount: '200',
+                premiumRateBps: 300,
+                minDurationWeeks: 6,
+                maxDurationWeeks: 12,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+                quoteBookQuoteId: '8',
+                quoteSource: 'quotebook',
+                minFillAmount: '500',
+            },
+        ]);
+
+        const preparation = await sdk.preparePurchase(1, 100n, 4);
+
+        expect(preparation.status).toBe('blocked');
+        expect(preparation.quote).toBeNull();
+        expect(preparation.purchaseTx).toBeUndefined();
+        expect(preparation.blockers.map((blocker) => blocker.code)).toEqual([
+            'AMOUNT_EXCEEDS_CAPACITY',
+            'AMOUNT_BELOW_MIN_FILL',
+            'DURATION_OUT_OF_RANGE',
+        ]);
+        expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'purchase_preparation_blocked',
+        }));
+    });
+
+    it('purchase routes QuoteBook quotes through the direct purchase path', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+        });
+
+        (sdk as any)._assertConfiguredChain = vi.fn();
+        vi.spyOn(sdk, 'getFixedRateQuotes').mockResolvedValue([
+            {
+                id: 'quote-1',
+                poolId: 1,
+                syndicateAddress: '0x' + '22'.repeat(20),
+                syndicateName: 'Alpha',
+                coverageAmount: '1000000',
+                premiumRateBps: 300,
+                minDurationWeeks: 1,
+                maxDurationWeeks: 12,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+                orderId: 7,
+                quoteBookQuoteId: '7',
+                quoteSource: 'quotebook',
+            },
+        ]);
+        const directSpy = vi.spyOn(sdk as any, '_executeDirectQuoteBookPurchase').mockResolvedValue({ txHash: '0xabc' });
+
+        const result = await sdk.purchase(1, 1n, 1);
+        expect(result.txHash).toBe('0xabc');
+        expect(directSpy).toHaveBeenCalledOnce();
+    });
+
+    it('purchase uses the first executable quote rather than the first quoted rate', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+        });
+
+        (sdk as any)._assertConfiguredChain = vi.fn();
+        vi.spyOn(sdk, 'getActiveQuotes').mockResolvedValue([
+            {
+                id: 'quote-unfillable',
+                poolId: 1,
+                syndicateAddress: '0x' + '22'.repeat(20),
+                syndicateName: 'Alpha',
+                coverageAmount: '10',
+                premiumRateBps: 300,
+                minDurationWeeks: 1,
+                maxDurationWeeks: 12,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+                quoteBookQuoteId: '7',
+                quoteSource: 'quotebook',
+            },
+            {
+                id: 'quote-fillable',
+                poolId: 1,
+                syndicateAddress: '0x' + '33'.repeat(20),
+                syndicateName: 'Beta',
+                coverageAmount: '1000000',
+                premiumRateBps: 325,
+                minDurationWeeks: 1,
+                maxDurationWeeks: 12,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+                quoteBookQuoteId: '8',
+                quoteSource: 'quotebook',
+            },
+        ]);
+        const purchaseQuoteSpy = vi.spyOn(sdk, 'purchaseQuote').mockResolvedValue({ txHash: '0xdef' });
+
+        const result = await sdk.purchase(1, 500n, 1);
+        expect(result.txHash).toBe('0xdef');
+        expect(purchaseQuoteSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'quote-fillable' }),
+            500n,
+            1,
+            undefined,
+            '0x' + '00'.repeat(32)
+        );
+    });
+
+    it('purchaseQuote executes the selected quote directly', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+        });
+        const quote = {
+            id: 'quote-selected',
+            poolId: 1,
+            syndicateAddress: '0x' + '22'.repeat(20),
+            syndicateName: 'Alpha',
+            coverageAmount: '1000000',
+            premiumRateBps: 300,
+            minDurationWeeks: 1,
+            maxDurationWeeks: 12,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            status: 'active' as const,
+            quoteBookQuoteId: '7',
+            quoteSource: 'quotebook',
+        };
+
+        (sdk as any)._assertConfiguredChain = vi.fn();
+        const directSpy = vi.spyOn(sdk as any, '_executeDirectQuoteBookPurchase').mockResolvedValue({ txHash: '0xabc' });
+
+        const result = await sdk.purchaseQuote(quote, 100n, 4);
+        expect(result.txHash).toBe('0xabc');
+        expect(directSpy).toHaveBeenCalledWith(quote, 100n, 2419200, '0x' + '00'.repeat(32));
+    });
+
+    it('purchase rejects legacy non-QuoteBook quotes', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+        });
+
+        (sdk as any)._assertConfiguredChain = vi.fn();
+        vi.spyOn(sdk, 'getFixedRateQuotes').mockResolvedValue([
+            {
+                id: 'quote-1',
+                poolId: 1,
+                syndicateAddress: '0x' + '22'.repeat(20),
+                syndicateName: 'Alpha',
+                coverageAmount: '1000000',
+                premiumRateBps: 300,
+                minDurationWeeks: 1,
+                maxDurationWeeks: 12,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                status: 'active',
+            },
+        ]);
+
+        await expect(sdk.purchase(1, 1n, 1)).rejects.toThrow('Quote quote-1 is not an executable QuoteBook quote.');
+    });
+
+    it('purchaseQuote throws PurchaseBlockedError for non-executable selected quotes', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+        });
+        const quote = {
+            id: 'quote-selected',
+            poolId: 1,
+            syndicateAddress: '0x' + '22'.repeat(20),
+            syndicateName: 'Alpha',
+            coverageAmount: '10',
+            premiumRateBps: 300,
+            minDurationWeeks: 1,
+            maxDurationWeeks: 12,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            status: 'active' as const,
+            quoteBookQuoteId: '7',
+            quoteSource: 'quotebook',
+        };
+
+        (sdk as any)._assertConfiguredChain = vi.fn();
+
+        await expect(sdk.purchaseQuote(quote, 100n, 4)).rejects.toBeInstanceOf(PurchaseBlockedError);
+    });
+
+    it('purchaseQuote throws QuoteStaleError when a selected quote is stale and gone', async () => {
+        const provider = new JsonRpcProvider('http://localhost:8545', undefined, { staticNetwork: true });
+        const signer = Wallet.createRandom().connect(provider);
+        const sdk = new LayerCoverSDK(signer, '0x' + '11'.repeat(20), {
+            apiBaseUrl: 'https://test.layercover.com',
+            deployment: 'base_sepolia_usdc',
+            chainId: 84532,
+        });
+        const quote = {
+            id: 'quote-selected',
+            poolId: 1,
+            syndicateAddress: '0x' + '22'.repeat(20),
+            syndicateName: 'Alpha',
+            coverageAmount: '1000000',
+            premiumRateBps: 300,
+            minDurationWeeks: 1,
+            maxDurationWeeks: 12,
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            fetchedAt: new Date(Date.now() - 60_000).toISOString(),
+            status: 'active' as const,
+            quoteBookQuoteId: '7',
+            quoteSource: 'quotebook',
+        };
+
+        (sdk as any)._assertConfiguredChain = vi.fn();
+        vi.spyOn(sdk, 'getActiveQuotes').mockResolvedValue([]);
+
+        await expect(sdk.purchaseQuote(quote, 100n, 4)).rejects.toBeInstanceOf(QuoteStaleError);
+    });
+
+    it('getPolicy uses the current PolicyNFT tuple shape', async () => {
+        const sdk = createSdk();
+        (sdk as any)._policyNFTAddress = '0x' + '66'.repeat(20);
+
+        const nft = await (sdk as any)._getPolicyNFT();
+        const getPolicy = nft.interface.getFunction('getPolicy');
+        const outputs = getPolicy.outputs?.[0]?.components ?? [];
+        const intentComponents = outputs.find((component: any) => component.name === 'intent')?.components ?? [];
+
+        const artifactGetPolicy = loadPolicyNftAbi().find((entry: any) => entry.type === 'function' && entry.name === 'getPolicy');
+        const artifactIntentComponents = artifactGetPolicy.outputs?.[0]?.components?.find((component: any) => component.name === 'intent')?.components ?? [];
+
+        expect(intentComponents.map((component: any) => component.name)).toEqual(
+            artifactIntentComponents.map((component: any) => component.name)
+        );
+        expect(intentComponents.map((component: any) => component.name)).not.toContain('cancellationPenaltyBps');
     });
 });
 
@@ -349,6 +788,41 @@ describe('LayerCoverSDK.isQuoteExpired', () => {
             status: 'active' as const,
         };
         expect(LayerCoverSDK.isQuoteExpired(quote)).toBe(false);
+    });
+});
+
+describe('LayerCoverSDK.isQuoteStale', () => {
+    it('returns true for expired quotes even without fetchedAt', () => {
+        const quote = {
+            id: 'stale-1', poolId: 1, syndicateAddress: '0x1', syndicateName: 'Test',
+            coverageAmount: '1000', premiumRateBps: 500, minDurationWeeks: 1,
+            maxDurationWeeks: 12, expiresAt: '2020-01-01T00:00:00Z',
+            status: 'active' as const,
+        };
+        expect(LayerCoverSDK.isQuoteStale(quote)).toBe(true);
+    });
+
+    it('returns true for old cached quotes', () => {
+        const quote = {
+            id: 'stale-2', poolId: 1, syndicateAddress: '0x1', syndicateName: 'Test',
+            coverageAmount: '1000', premiumRateBps: 500, minDurationWeeks: 1,
+            maxDurationWeeks: 12, expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            fetchedAt: new Date(Date.now() - 60_000).toISOString(),
+            status: 'active' as const,
+        };
+        expect(LayerCoverSDK.getQuoteAgeMs(quote)).toBeGreaterThan(30_000);
+        expect(LayerCoverSDK.isQuoteStale(quote)).toBe(true);
+    });
+
+    it('returns false for fresh quotes', () => {
+        const quote = {
+            id: 'stale-3', poolId: 1, syndicateAddress: '0x1', syndicateName: 'Test',
+            coverageAmount: '1000', premiumRateBps: 500, minDurationWeeks: 1,
+            maxDurationWeeks: 12, expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            fetchedAt: new Date().toISOString(),
+            status: 'active' as const,
+        };
+        expect(LayerCoverSDK.isQuoteStale(quote)).toBe(false);
     });
 });
 

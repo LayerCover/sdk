@@ -13,6 +13,45 @@
  * ```
  */
 export declare const ERROR_MESSAGES: Record<string, string>;
+export interface PurchaseBlockerLike {
+    code: string;
+    message: string;
+    quoteId?: string;
+}
+export declare class LayerCoverSDKError extends Error {
+    code: string;
+    cause?: unknown;
+    constructor(message: string, code?: string, options?: {
+        cause?: unknown;
+    });
+}
+export declare class PurchaseBlockedError extends LayerCoverSDKError {
+    blockers: PurchaseBlockerLike[];
+    constructor(message: string, blockers: PurchaseBlockerLike[], options?: {
+        cause?: unknown;
+    });
+}
+export declare class QuoteStaleError extends LayerCoverSDKError {
+    quoteId: string;
+    maxAgeMs: number;
+    quoteAgeMs: number | null;
+    constructor(message: string, quoteId: string, maxAgeMs: number, quoteAgeMs: number | null, options?: {
+        cause?: unknown;
+    });
+}
+export declare class SignerRequiredError extends LayerCoverSDKError {
+    constructor(message?: string, options?: {
+        cause?: unknown;
+    });
+}
+export declare class ChainMismatchError extends LayerCoverSDKError {
+    expectedChainId: number;
+    connectedChainId: number;
+    expectedDeployment?: string;
+    constructor(message: string, expectedChainId: number, connectedChainId: number, expectedDeployment?: string, options?: {
+        cause?: unknown;
+    });
+}
 /**
  * Decode a contract or wallet error into a human-readable message.
  *

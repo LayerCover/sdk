@@ -1,8 +1,15 @@
 import { ethers, Contract, Signer, Provider } from 'ethers-v6';
-import { getHumanError as _getHumanError } from './errors';
+import {
+    getHumanError as _getHumanError,
+    LayerCoverSDKError,
+    PurchaseBlockedError,
+    QuoteStaleError,
+    SignerRequiredError,
+    ChainMismatchError,
+} from './errors';
 export * from './adapters';
 export * from './viem-adapter';
-export { ERROR_MESSAGES, getHumanError } from './errors';
+export * from './errors';
 
 
 const BPS = 10000n;
@@ -24,6 +31,26 @@ export interface SDKLogger {
     debug: LogFn;
     warn: LogFn;
     error: LogFn;
+}
+
+export type SDKEventType =
+    | 'quotes_fetched'
+    | 'quote_revalidated'
+    | 'purchase_prepared'
+    | 'purchase_preparation_blocked'
+    | 'approval_submitted'
+    | 'approval_confirmed'
+    | 'purchase_submitted'
+    | 'purchase_confirmed'
+    | 'purchase_sync_succeeded'
+    | 'purchase_sync_failed';
+
+export interface SDKEvent {
+    type: SDKEventType;
+    timestamp: string;
+    chainId: number;
+    deployment: string;
+    data: Record<string, unknown>;
 }
 
 function createLogger(debug: boolean | SDKLogger | undefined): SDKLogger {
@@ -62,63 +89,18 @@ export interface FixedRateQuote {
     status: 'active' | 'expired' | 'filled';
     /** On-chain sell order ID (if posted) */
     orderId?: number;
-}
-
-/**
- * Reserve intent for intent-based (Flash Quote) purchases.
- * Represents a syndicate's signed commitment to underwrite coverage.
- * Obtained via {@link LayerCoverSDK.refreshQuote}.
- */
-export interface ReserveIntent {
-    /** Solver/relayer address that coordinates the match */
-    solver: string;
-    /** Syndicate (underwriter) address providing coverage */
-    underwriter: string;
-    /** Pool ID this intent applies to */
-    poolId: number;
-    /** Minimum coverage duration in seconds */
-    minCoverageDuration: number;
-    /** Maximum coverage duration in seconds */
-    maxCoverageDuration: number;
-    /** Maximum coverage amount (as BigInt string) */
-    coverageAmount: string;
-    /** Minimum fill amount (as BigInt string); 0 = no minimum */
-    minFillAmount: string;
-    /** Whether the buyer can partially fill this intent */
-    allowPartialFill: boolean;
-    /** Unix timestamp when this reservation expires */
-    reservationExpiry: number;
-    /** Unique nonce to prevent replay */
-    nonce: string;
-    /** Optional: restrict to a specific buyer address */
-    whitelistedBuyer?: string;
-    /** Minimum premium rate in basis points (seller's floor) */
-    minPremiumBps: number;
-    /** Cancellation penalty in basis points */
-    cancellationPenaltyBps: number;
-    // --- API alias fields (coverageIntent shape from /api/quotes PUT) ---
-    /** @internal Alias for `underwriter` in API responses */
-    maker?: string;
-    /** @internal Alias for `minCoverageDuration` */
-    minDuration?: number;
-    /** @internal Alias for `maxCoverageDuration` */
-    maxDuration?: number;
-    /** @internal Alias for `reservationExpiry` */
-    expiry?: number;
-    /** @internal Whether upfront premium deposit is required */
+    /** On-chain QuoteBook quote id for direct PurchaseGateway fills */
+    quoteBookQuoteId?: string;
+    /** Whether the quote requires the full premium upfront */
     requiresUpfront?: boolean;
-    /** @internal Random salt for uniqueness */
-    salt?: string;
-    /** @internal Alias for `minPremiumBps` */
-    premiumRateBps?: number;
-}
-
-/**
- * Refreshed quote with fresh reservation (Flash Quote)
- */
-export interface RefreshedQuote {
-    reserveIntent: ReserveIntent;
-    signature: string;
+    /** Minimum fill amount required by the on-chain quote */
+    minFillAmount?: string;
+    /** QuoteBook extension address associated with this quote */
+    quoteBookExtension?: string;
+    /** Origin of the quote */
+    quoteSource?: string;
+    /** When this quote snapshot was fetched by the SDK */
+    fetchedAt?: string;
 }
 
 /**
@@ -128,6 +110,131 @@ export interface PurchaseResult {
     txHash: string;
     policyId?: string;
 }
+
+export type PurchaseBlockerCode =
+    | 'NO_ACTIVE_QUOTES'
+    | 'RATE_TOO_HIGH'
+    | 'QUOTE_STALE'
+    | 'NON_EXECUTABLE_QUOTE'
+    | 'AMOUNT_EXCEEDS_CAPACITY'
+    | 'AMOUNT_BELOW_MIN_FILL'
+    | 'DURATION_OUT_OF_RANGE'
+    | 'SIGNER_REQUIRED'
+    | 'CHAIN_MISMATCH';
+
+export interface PurchaseBlocker {
+    code: PurchaseBlockerCode;
+    message: string;
+    quoteId?: string;
+}
+
+interface PreparedPurchaseBase {
+    quote: FixedRateQuote | null;
+    coverageAmount: bigint;
+    durationWeeks: number;
+    durationSeconds: number;
+    referralCode: string;
+}
+
+export interface PreparedPurchaseBlocked extends PreparedPurchaseBase {
+    status: 'blocked';
+    blockers: PurchaseBlocker[];
+    paymentTokenAddress?: undefined;
+    purchaseGatewayAddress?: undefined;
+    quoteBookQuoteId?: undefined;
+    requiresUpfront?: undefined;
+    minFillAmount?: undefined;
+    premium?: undefined;
+    premiumDeposit?: undefined;
+    approvalAmount?: undefined;
+    approvalNeeded?: undefined;
+    approvalTx?: undefined;
+    purchaseTx?: undefined;
+}
+
+interface PreparedExecutablePurchaseBase extends PreparedPurchaseBase {
+    quote: FixedRateQuote;
+    blockers: PurchaseBlocker[];
+    paymentTokenAddress?: string;
+    purchaseGatewayAddress?: string;
+    quoteBookQuoteId?: string;
+    requiresUpfront?: boolean;
+    minFillAmount?: bigint;
+    premium?: bigint;
+    premiumDeposit?: bigint;
+    approvalAmount?: bigint;
+    approvalTx?: ethers.TransactionRequest;
+    purchaseTx?: ethers.TransactionRequest;
+}
+
+export interface PreparedPurchaseReady extends PreparedExecutablePurchaseBase {
+    status: 'ready';
+    blockers: [];
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded: false;
+    approvalTx?: undefined;
+    purchaseTx: ethers.TransactionRequest;
+}
+
+export interface PreparedPurchaseApprovalRequired extends PreparedExecutablePurchaseBase {
+    status: 'approval_required';
+    blockers: [];
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded: true;
+    approvalTx: ethers.TransactionRequest;
+    purchaseTx: ethers.TransactionRequest;
+}
+
+export interface PreparedPurchaseSignerRequired extends PreparedExecutablePurchaseBase {
+    status: 'signer_required';
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded?: undefined;
+    approvalTx: ethers.TransactionRequest;
+    purchaseTx: ethers.TransactionRequest;
+}
+
+export interface PreparedPurchaseChainMismatch extends PreparedExecutablePurchaseBase {
+    status: 'chain_mismatch';
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded?: undefined;
+    approvalTx: ethers.TransactionRequest;
+    purchaseTx: ethers.TransactionRequest;
+}
+
+export type PreparedPurchase =
+    | PreparedPurchaseBlocked
+    | PreparedPurchaseReady
+    | PreparedPurchaseApprovalRequired
+    | PreparedPurchaseSignerRequired
+    | PreparedPurchaseChainMismatch;
 
 export interface SyndicateDepositOptions {
     /** Defaults to signer address. Must equal signer for current Syndicate auth model. */
@@ -165,19 +272,6 @@ export interface SyndicateDeadlineOptions {
 export interface SyndicateUpkeepOptions extends SyndicateDeadlineOptions {
     /** Minimum required harvested amount when using guarded upkeep path. */
     minHarvestAmount?: bigint;
-}
-
-/**
- * @deprecated Use FixedRateQuote instead
- */
-export interface Quote {
-    poolId: number;
-    amount: bigint;
-    period: number;
-    rateBps: number;
-    premium: bigint;
-    minDeposit: bigint;
-    capacity: bigint;
 }
 
 export interface PoolMetadata {
@@ -367,30 +461,39 @@ export const CONTRACT_ADDRESSES: Record<number, {
     intentOrderBook: string;
     poolRegistry?: string;
     capitalPool?: string;
+    purchaseGateway?: string;
+    quoteBookExtension?: string;
+    systemRegistry?: string;
 }> = {
     // Base Sepolia (testnet) — synced with /api/config as of Mar 2026
     84532: {
         policyManager: '0xbd0Cb34253c84201F746F0A9DF062d82c0823c56',
         intentOrderBook: '0x7865f2e07dFe0d4dC4345bF5DFFFAd757a901337',
         poolRegistry: '0xB65cE4662FFB20aE7Ddd7314B975F8A1b6dA4e59',
+        systemRegistry: '0xa78504e117Af2474f9F0cEEc3B019188C8E610cA',
     },
     // Avalanche Fuji (testnet)
     43113: {
         policyManager: '0x573e39aB7edfD840778C131d49AE89968bC53C0A',
         intentOrderBook: '0x67e456aa9b976FD75398d94C3Be17FBb55c865ab',
         poolRegistry: '0xDddF32B1e6406D090B35edf770c90A18D55E75fb',
+        systemRegistry: '0xa040D40bAa1927B30DCB212A087adf35E8aBBdDB',
     },
     // Ethereum Sepolia (testnet)
     11155111: {
         policyManager: '0xa83A38e37153b59F329204eed0948284b046ac97',
         intentOrderBook: '0x0278E36b7e0214b0912c16460b741Ff526801e5E',
         poolRegistry: '0x00667d277699c4a33BC699be6393c320589819A0',
+        purchaseGateway: '0x0cF27022394E7FddFc649d394Bc4c7467Ec08006',
+        quoteBookExtension: '0x9155cF88A39ceFDea0D66af20488E3685F3bb2eA',
+        systemRegistry: '0xf285ca9d47d7C939b80F5fF85E4Ccd9559e4982E',
     },
     // Local development
     31337: {
         policyManager: '0xc5415607F07b8554354e7689B37B0ED6DAA13205',
         intentOrderBook: '0x2DacaDb603699Fa3367aBE99BB27dD88f5753274',
         poolRegistry: '0x026EF62C333f443Ea68F6ffa659A8Faf781492b7',
+        systemRegistry: '0x9FEAeF4F619dAc60ac3936Ab0ebB1cdD72818002',
     },
 };
 
@@ -400,6 +503,9 @@ type FallbackDeploymentConfig = {
         policyManager: string;
         intentOrderBook: string;
         poolRegistry?: string;
+        purchaseGateway?: string;
+        quoteBookExtension?: string;
+        systemRegistry?: string;
     };
 };
 
@@ -410,6 +516,7 @@ export const DEPLOYMENT_FALLBACK_CONFIGS: Record<string, FallbackDeploymentConfi
             policyManager: '0xbd0Cb34253c84201F746F0A9DF062d82c0823c56',
             intentOrderBook: '0x7865f2e07dFe0d4dC4345bF5DFFFAd757a901337',
             poolRegistry: '0xB65cE4662FFB20aE7Ddd7314B975F8A1b6dA4e59',
+            systemRegistry: '0xa78504e117Af2474f9F0cEEc3B019188C8E610cA',
         },
     },
     base_sepolia_wsteth: {
@@ -418,6 +525,7 @@ export const DEPLOYMENT_FALLBACK_CONFIGS: Record<string, FallbackDeploymentConfi
             policyManager: '0x1d2c6275dC7DE388E793F6b7B73B93515dEC1B9f',
             intentOrderBook: '0x2715F9faE2e38d24D921480b85f9bCd489bFa5D4',
             poolRegistry: '0x6218439dFd31656a8AC508D7A5e52bEF9eFEf378',
+            systemRegistry: '0xa78504e117Af2474f9F0cEEc3B019188C8E610cA',
         },
     },
     avalanche_fuji_usdc: {
@@ -426,6 +534,7 @@ export const DEPLOYMENT_FALLBACK_CONFIGS: Record<string, FallbackDeploymentConfi
             policyManager: '0x573e39aB7edfD840778C131d49AE89968bC53C0A',
             intentOrderBook: '0x67e456aa9b976FD75398d94C3Be17FBb55c865ab',
             poolRegistry: '0xDddF32B1e6406D090B35edf770c90A18D55E75fb',
+            systemRegistry: '0xa040D40bAa1927B30DCB212A087adf35E8aBBdDB',
         },
     },
     ethereum_sepolia_usdc: {
@@ -434,6 +543,9 @@ export const DEPLOYMENT_FALLBACK_CONFIGS: Record<string, FallbackDeploymentConfi
             policyManager: '0xa83A38e37153b59F329204eed0948284b046ac97',
             intentOrderBook: '0x0278E36b7e0214b0912c16460b741Ff526801e5E',
             poolRegistry: '0x00667d277699c4a33BC699be6393c320589819A0',
+            purchaseGateway: '0x0cF27022394E7FddFc649d394Bc4c7467Ec08006',
+            quoteBookExtension: '0x9155cF88A39ceFDea0D66af20488E3685F3bb2eA',
+            systemRegistry: '0xf285ca9d47d7C939b80F5fF85E4Ccd9559e4982E',
         },
     },
     localhost_usdc: {
@@ -442,6 +554,7 @@ export const DEPLOYMENT_FALLBACK_CONFIGS: Record<string, FallbackDeploymentConfi
             policyManager: '0xc5415607F07b8554354e7689B37B0ED6DAA13205',
             intentOrderBook: '0x2DacaDb603699Fa3367aBE99BB27dD88f5753274',
             poolRegistry: '0x026EF62C333f443Ea68F6ffa659A8Faf781492b7',
+            systemRegistry: '0x9FEAeF4F619dAc60ac3936Ab0ebB1cdD72818002',
         },
     },
 };
@@ -473,29 +586,35 @@ export function getIntentOrderBookAddress(chainId: number): string {
 }
 
 /**
- * Default chain ID for LayerCover (Base Sepolia testnet)
+ * Default chain ID for LayerCover (Ethereum Sepolia testnet)
  */
-export const DEFAULT_CHAIN_ID = 84532;
+export const DEFAULT_CHAIN_ID = 11155111;
 
 /**
  * Default API base URL for LayerCover
  */
 export const DEFAULT_API_BASE_URL = 'https://app.layercover.com';
-const DEFAULT_DEPLOYMENT = 'base_sepolia_usdc';
+const DEFAULT_DEPLOYMENT = 'ethereum_sepolia_usdc';
+const DEFAULT_DEPLOYMENT_BY_CHAIN: Record<number, string> = {
+    11155111: 'ethereum_sepolia_usdc',
+    84532: 'base_sepolia_usdc',
+    43113: 'avalanche_fuji_usdc',
+    31337: 'localhost_usdc',
+};
 const DEFAULT_API_TIMEOUT_MS = 15_000;
 const DEFAULT_API_RETRIES = 2;
 const DEFAULT_API_RETRY_DELAY_MS = 300;
 const DEFAULT_TX_CONFIRMATIONS = 1;
 const DEFAULT_TX_WAIT_TIMEOUT_MS = 180_000;
+const DEFAULT_QUOTE_STALE_MS = 30_000;
 
 /**
  * Thrown when the best available premium rate exceeds the caller's maximum.
  * Contains both the actual rate and the requested ceiling for UI messaging.
  */
-export class RateTooHighError extends Error {
+export class RateTooHighError extends LayerCoverSDKError {
     constructor(message: string, public rate: number, public maxRate: number) {
-        super(message);
-        this.name = "RateTooHighError";
+        super(message, 'RATE_TOO_HIGH');
     }
 }
 
@@ -503,10 +622,9 @@ export class RateTooHighError extends Error {
  * Thrown when no underwriter quotes are available for a pool.
  * This typically means no syndicates are currently offering coverage.
  */
-export class NoQuotesAvailableError extends Error {
+export class NoQuotesAvailableError extends LayerCoverSDKError {
     constructor(message: string /* , public poolId: number */) {
-        super(message);
-        this.name = "NoQuotesAvailableError";
+        super(message, 'NO_ACTIVE_QUOTES');
     }
 }
 
@@ -521,6 +639,12 @@ export interface LayerCoverSDKOptions {
     policyNFTAddress?: string;
     /** PoolRegistry contract address (optional explicit override) */
     poolRegistryAddress?: string;
+    /** PurchaseGateway contract address for direct QuoteBook purchases */
+    purchaseGatewayAddress?: string;
+    /** QuoteBookExtension contract address */
+    quoteBookExtensionAddress?: string;
+    /** SystemRegistry contract address for runtime contract discovery */
+    systemRegistryAddress?: string;
     /** API base URL for fetching quotes (default: https://app.layercover.com) */
     apiBaseUrl?: string;
     /** Deployment identifier (e.g., 'base_sepolia_usdc') */
@@ -543,6 +667,8 @@ export interface LayerCoverSDKOptions {
      * Default: silent (no console output).
      */
     debug?: boolean | SDKLogger;
+    /** Optional structured lifecycle event hook for quotes, preflight, and transactions. */
+    onEvent?: (event: SDKEvent) => void;
 }
 
 // ============================================================================
@@ -574,13 +700,12 @@ export class LayerCoverSDK {
     signer?: Signer;
     /** PolicyManager contract instance */
     policyManager: Contract;
-    /** IntentOrderBook contract instance (undefined if not deployed on this chain) */
-    intentOrderBook?: Contract;
 
     private _apiBaseUrl: string;
     private _deployment: string;
     private _chainId: number;
     private _log: SDKLogger;
+    private _onEvent?: (event: SDKEvent) => void;
     private _requestTimeoutMs: number;
     private _maxRetries: number;
     private _retryDelayMs: number;
@@ -596,6 +721,9 @@ export class LayerCoverSDK {
     private _policyNFTAddress?: string;
     private _poolRegistryAddress?: string;
     private _settlementAssetAddress?: string;
+    private _purchaseGatewayAddress?: string;
+    private _quoteBookExtensionAddress?: string;
+    private _systemRegistryAddress?: string;
 
     constructor(
         providerOrSigner: Provider | Signer,
@@ -612,12 +740,16 @@ export class LayerCoverSDK {
             this.provider = providerOrSigner as Provider;
         }
 
-        this._apiBaseUrl = (options.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
-        this._deployment = options.deployment || DEFAULT_DEPLOYMENT;
         this._chainId = options.chainId || DEFAULT_CHAIN_ID;
+        this._apiBaseUrl = (options.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+        this._deployment = options.deployment || LayerCoverSDK._getDefaultDeploymentForChain(this._chainId) || DEFAULT_DEPLOYMENT;
         this._policyNFTAddress = options.policyNFTAddress;
         this._poolRegistryAddress = options.poolRegistryAddress || CONTRACT_ADDRESSES[this._chainId]?.poolRegistry;
+        this._purchaseGatewayAddress = options.purchaseGatewayAddress || CONTRACT_ADDRESSES[this._chainId]?.purchaseGateway;
+        this._quoteBookExtensionAddress = options.quoteBookExtensionAddress || CONTRACT_ADDRESSES[this._chainId]?.quoteBookExtension;
+        this._systemRegistryAddress = options.systemRegistryAddress || CONTRACT_ADDRESSES[this._chainId]?.systemRegistry;
         this._log = createLogger(options.debug);
+        this._onEvent = options.onEvent;
         this._requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? DEFAULT_API_TIMEOUT_MS);
         this._maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_API_RETRIES);
         this._retryDelayMs = Math.max(0, options.retryDelayMs ?? DEFAULT_API_RETRY_DELAY_MS);
@@ -641,20 +773,45 @@ export class LayerCoverSDK {
             this.signer || this.provider
         );
 
-        // Initialize IntentOrderBook
-        const orderBookAddress = options.intentOrderBookAddress ||
-            CONTRACT_ADDRESSES[this._chainId]?.intentOrderBook;
+    }
 
-        if (orderBookAddress && orderBookAddress !== ethers.ZeroAddress) {
-            this.intentOrderBook = new Contract(
-                orderBookAddress,
-                [
-                    // Current IntentMatcher entrypoint (supports Permit2 + vault-cover order fields)
-                    'function executeMatchedIntent(tuple(address maker, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 minDuration, uint256 maxDuration, uint256 nonce, uint256 expiry, uint256 salt, bool requiresUpfront, uint16 cancellationPenaltyBps, uint256 minFillAmount, address whitelistedBuyer)[] intents, bytes[] intentSignatures, tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode, address vault, uint256 sharesToCover) order, bytes orderSignature, uint256[] fillAmounts, address vault, uint256 sharesToCover, uint256 permit2Nonce, uint256 permit2Deadline, bytes permit2Signature) external returns (uint256[])',
-                ],
-                this.signer || this.provider
-            );
+    private _emitEvent(type: SDKEventType, data: Record<string, unknown> = {}): void {
+        if (!this._onEvent) return;
+
+        try {
+            this._onEvent({
+                type,
+                timestamp: new Date().toISOString(),
+                chainId: this._chainId,
+                deployment: this._deployment,
+                data,
+            });
+        } catch (error: any) {
+            this._log.warn('[LayerCover SDK] onEvent callback failed:', error?.message || String(error));
         }
+    }
+
+    private _emitPreparedPurchaseEvent(result: PreparedPurchase, source: 'pool' | 'quote'): void {
+        const eventType = result.status === 'blocked'
+            ? 'purchase_preparation_blocked'
+            : 'purchase_prepared';
+
+        this._emitEvent(eventType, {
+            source,
+            status: result.status,
+            quoteId: result.quote?.id ?? null,
+            poolId: result.quote?.poolId ?? null,
+            coverageAmount: result.coverageAmount.toString(),
+            durationWeeks: result.durationWeeks,
+            blockerCodes: result.blockers.map((blocker) => blocker.code),
+        });
+    }
+
+    private _buildPurchaseBlockedError(blockers: PurchaseBlocker[]): PurchaseBlockedError {
+        const message = blockers.length > 0
+            ? blockers.map((blocker) => blocker.message).join(' ')
+            : 'Purchase is blocked.';
+        return new PurchaseBlockedError(message, blockers);
     }
 
     // ========================================================================
@@ -670,6 +827,9 @@ export class LayerCoverSDK {
             intentOrderBook: string;
             intentMatcher?: string;
             poolRegistry?: string;
+            purchaseGateway?: string;
+            quoteBookExtension?: string;
+            systemRegistry?: string;
         };
         chainId: number;
         apiBaseUrl: string;
@@ -679,12 +839,7 @@ export class LayerCoverSDK {
 
     private static _getDefaultDeploymentForChain(chainId?: number): string | undefined {
         if (!chainId) return undefined;
-
-        for (const [deployment, config] of Object.entries(DEPLOYMENT_FALLBACK_CONFIGS)) {
-            if (config.chainId === chainId) return deployment;
-        }
-
-        return chainId === DEFAULT_CHAIN_ID ? DEFAULT_DEPLOYMENT : undefined;
+        return DEFAULT_DEPLOYMENT_BY_CHAIN[chainId];
     }
 
     private static _getFallbackDeploymentConfig(deployment?: string): FallbackDeploymentConfig | undefined {
@@ -724,6 +879,9 @@ export class LayerCoverSDK {
             policyManager: string;
             intentOrderBook: string;
             poolRegistry?: string;
+            purchaseGateway?: string;
+            quoteBookExtension?: string;
+            systemRegistry?: string;
         };
         chainId: number;
         apiBaseUrl: string;
@@ -750,6 +908,9 @@ export class LayerCoverSDK {
                     policyManager: deploymentConfig.contracts.policyManager,
                     intentOrderBook: deploymentConfig.contracts.intentOrderBook,
                     poolRegistry: deploymentConfig.contracts.poolRegistry,
+                    purchaseGateway: deploymentConfig.contracts.purchaseGateway,
+                    quoteBookExtension: deploymentConfig.contracts.quoteBookExtension,
+                    systemRegistry: deploymentConfig.contracts.systemRegistry,
                 },
                 chainId: deploymentConfig.chainId,
                 apiBaseUrl,
@@ -767,6 +928,9 @@ export class LayerCoverSDK {
                 policyManager: addresses.policyManager,
                 intentOrderBook: addresses.intentOrderBook,
                 poolRegistry: addresses.poolRegistry,
+                purchaseGateway: addresses.purchaseGateway,
+                quoteBookExtension: addresses.quoteBookExtension,
+                systemRegistry: addresses.systemRegistry,
             },
             chainId,
             apiBaseUrl,
@@ -795,6 +959,9 @@ export class LayerCoverSDK {
             intentMatcher?: string;
             policyNFT?: string;
             poolRegistry?: string;
+            purchaseGateway?: string;
+            quoteBookExtension?: string;
+            systemRegistry?: string;
         };
         chainId: number;
         apiBaseUrl: string;
@@ -892,6 +1059,19 @@ export class LayerCoverSDK {
                 contracts.intentOrderBook ||
                 deploymentFallback.intentOrderBook ||
                 chainFallbackAddresses.intentOrderBook,
+            purchaseGateway:
+                contracts.purchaseGateway ||
+                deploymentFallback.purchaseGateway ||
+                chainFallbackAddresses.purchaseGateway,
+            quoteBookExtension:
+                contracts.quoteBookExtension ||
+                contracts.purchaseExtension ||
+                deploymentFallback.quoteBookExtension ||
+                chainFallbackAddresses.quoteBookExtension,
+            systemRegistry:
+                contracts.systemRegistry ||
+                deploymentFallback.systemRegistry ||
+                chainFallbackAddresses.systemRegistry,
             poolRegistry:
                 contracts.poolRegistry || deploymentFallback.poolRegistry || chainFallbackAddresses.poolRegistry,
         };
@@ -937,6 +1117,7 @@ export class LayerCoverSDK {
             chainId?: number;
             deployment?: string;
             debug?: boolean | SDKLogger;
+            onEvent?: (event: SDKEvent) => void;
             requestTimeoutMs?: number;
             maxRetries?: number;
             retryDelayMs?: number;
@@ -965,13 +1146,16 @@ export class LayerCoverSDK {
             });
 
         return new LayerCoverSDK(providerOrSigner, config.contracts.policyManager, {
-            intentOrderBookAddress: config.contracts.intentOrderBook,
             policyNFTAddress: (config.contracts as any).policyNFT,
             poolRegistryAddress: (config.contracts as any).poolRegistry,
+            purchaseGatewayAddress: (config.contracts as any).purchaseGateway,
+            quoteBookExtensionAddress: (config.contracts as any).quoteBookExtension,
+            systemRegistryAddress: (config.contracts as any).systemRegistry,
             apiBaseUrl: requestedApiBase,
             chainId: config.chainId,
             deployment: config.deployment || DEFAULT_DEPLOYMENT,
             debug: options.debug,
+            onEvent: options.onEvent,
             requestTimeoutMs: options.requestTimeoutMs,
             maxRetries: options.maxRetries,
             retryDelayMs: options.retryDelayMs,
@@ -984,164 +1168,105 @@ export class LayerCoverSDK {
     // FIXED-RATE QUOTE METHODS (NEW)
     // ========================================================================
 
+    private _mapFixedRateQuote(q: any): FixedRateQuote {
+        const fetchedAt = new Date().toISOString();
+        const quoteBookQuoteId = q?.metadata?.quoteBookQuoteId;
+        const numericOrderId = quoteBookQuoteId != null
+            ? Number(quoteBookQuoteId)
+            : (Number.isFinite(Number(q?.orderId)) ? Number(q.orderId) : undefined);
+
+        return {
+            id: q.id,
+            poolId: Number(q.poolId),
+            syndicateAddress: q.syndicateAddress || q.address,
+            syndicateName: q.syndicateName || q.address || q.syndicateAddress || 'Unknown',
+            coverageAmount:
+                q.coverageAmount?.toString() ||
+                q.remainingCoverage?.toString() ||
+                q.coverageIntent?.coverageAmount ||
+                q.reserveIntent?.coverageAmount ||
+                '0',
+            premiumRateBps: Number(q.premiumRateBps),
+            minDurationWeeks: Number(q.minDurationWeeks),
+            maxDurationWeeks: Number(q.maxDurationWeeks),
+            expiresAt: q.expiresAt,
+            status: q.status || 'active',
+            orderId: numericOrderId,
+            quoteBookQuoteId: quoteBookQuoteId != null ? String(quoteBookQuoteId) : undefined,
+            requiresUpfront: q.requiresUpfront ?? q.coverageIntent?.requiresUpfront,
+            minFillAmount:
+                q?.metadata?.minFillAmount?.toString()
+                || q?.coverageIntent?.minFillAmount?.toString()
+                || q?.reserveIntent?.minFillAmount?.toString(),
+            quoteBookExtension: q?.metadata?.quoteBookExtension,
+            quoteSource: q?.metadata?.quoteSource,
+            fetchedAt,
+        };
+    }
+
+    private _normalizeFixedRateQuotes(rawQuotes: any[]): FixedRateQuote[] {
+        return (rawQuotes || [])
+            .map((quote: any) => this._mapFixedRateQuote(quote))
+            .sort((a, b) => a.premiumRateBps - b.premiumRateBps);
+    }
+
+    private async _fetchQuotesBatch(poolIds: number[]): Promise<Record<number, FixedRateQuote[]>> {
+        if (poolIds.length === 0) return {};
+
+        const url = `${this._apiBaseUrl}/api/quotes/batch?poolIds=${poolIds.join(',')}&deployment=${encodeURIComponent(this._deployment)}`;
+        this._log.debug('[LayerCover SDK] Fetching quotes batch from:', url);
+
+        const response = await this._fetchApi(url);
+        this._log.debug('[LayerCover SDK] Batch response status:', response.status);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch quotes: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const payload = data?.quotes && typeof data.quotes === 'object' ? data.quotes : {};
+
+        return Object.fromEntries(
+            poolIds.map((poolId) => [
+                poolId,
+                this._normalizeFixedRateQuotes(payload[String(poolId)] || payload[poolId] || []),
+            ])
+        );
+    }
+
     /**
      * Fetch available fixed-rate quotes from the orderbook API
      * @param poolId The pool ID to fetch quotes for
      * @returns Array of available quotes sorted by rate (lowest first)
      */
     async getFixedRateQuotes(poolId: number): Promise<FixedRateQuote[]> {
-        const url = `${this._apiBaseUrl}/api/quotes?poolId=${poolId}&deployment=${encodeURIComponent(this._deployment)}`;
-        this._log.debug('[LayerCover SDK] Fetching quotes from:', url);
+        this._assertInteger('poolId', poolId, 0);
 
-        const response = await this._fetchApi(url);
-        this._log.debug('[LayerCover SDK] Response status:', response.status);
+        try {
+            const quotesByPool = await this._fetchQuotesBatch([poolId]);
+            const quotes = quotesByPool[poolId] || [];
+            this._emitEvent('quotes_fetched', { poolId, count: quotes.length, source: 'batch' });
+            return quotes;
+        } catch (error: any) {
+            const message = String(error?.message || '');
+            if (!message.includes('404')) {
+                throw error;
+            }
+        }
+
+        // Backward compatibility for environments that still serve the old read route.
+        const legacyUrl = `${this._apiBaseUrl}/api/quotes?poolId=${poolId}&deployment=${encodeURIComponent(this._deployment)}`;
+        this._log.debug('[LayerCover SDK] Falling back to legacy quotes route:', legacyUrl);
+
+        const response = await this._fetchApi(legacyUrl);
+        this._log.debug('[LayerCover SDK] Legacy response status:', response.status);
         if (!response.ok) {
             throw new Error(`Failed to fetch quotes: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
-        const quotes: FixedRateQuote[] = (data.quotes || []).map((q: any) => ({
-            id: q.id,
-            poolId: q.poolId,
-            syndicateAddress: q.syndicateAddress,
-            syndicateName: q.syndicateName || 'Unknown',
-            coverageAmount: q.coverageAmount?.toString() || q.reserveIntent?.coverageAmount || '0',
-            premiumRateBps: Number(q.premiumRateBps),
-            minDurationWeeks: Number(q.minDurationWeeks),
-            maxDurationWeeks: Number(q.maxDurationWeeks),
-            expiresAt: q.expiresAt,
-            status: q.status || 'active',
-            orderId: q.orderId,
-        }));
-
-        // Sort by rate (lowest first)
-        return quotes.sort((a, b) => a.premiumRateBps - b.premiumRateBps);
-    }
-
-    /**
-     * Refresh a quote by signing a new intent client-side and submitting it.
-     * This is required before executing an intent-based purchase.
-     * The signer creates a fresh CoverageIntent, signs it, and submits to PUT.
-     * 
-     * @param quoteId The quote ID to refresh
-     * @param amount Coverage amount to reserve
-     * @param durationSeconds Coverage duration in seconds
-     * @returns Fresh reserve intent and signature
-     */
-    async refreshQuote(
-        quoteId: string,
-        amount: bigint,
-        durationSeconds: number
-    ): Promise<RefreshedQuote> {
-        if (!quoteId || !quoteId.trim()) {
-            throw new Error('quoteId is required');
-        }
-        this._assertPositiveBigInt('amount', amount);
-        this._assertInteger('durationSeconds', durationSeconds, 1);
-        if (!this.signer) {
-            throw new Error('Signer required for quote refresh');
-        }
-
-        // First, fetch the existing quote to get syndicate address and pool info
-        const getUrl = `${this._apiBaseUrl}/api/quotes?quoteId=${encodeURIComponent(quoteId)}`;
-        const getResponse = await this._fetchApi(getUrl);
-        if (!getResponse.ok) {
-            const err = await getResponse.json().catch(() => ({}));
-            throw new Error(err.error || `Failed to fetch quote: ${getResponse.status}`);
-        }
-        const existingData = await getResponse.json();
-        const existingQuote = existingData.quote || existingData.quotes?.[0];
-        if (!existingQuote) {
-            throw new Error('Quote not found');
-        }
-        if (existingQuote.status === 'expired' || (existingQuote.expiresAt && new Date(existingQuote.expiresAt).getTime() < Date.now())) {
-            throw new Error('Quote expired');
-        }
-
-        const syndicateAddress = existingQuote.syndicateAddress;
-        const poolId = existingQuote.poolId;
-
-        // Create a fresh CoverageIntent
-        const now = Math.floor(Date.now() / 1000);
-        const newExpiry = now + 600; // 10 minutes for reservation
-        const nonce = LayerCoverSDK._randomUint(12).toString();
-        const salt = ethers.hexlify(ethers.randomBytes(32));
-
-        const newIntent = {
-            maker: syndicateAddress,
-            poolId,
-            coverageAmount: amount.toString(),
-            premiumRateBps: existingQuote.premiumRateBps || existingQuote.coverageIntent?.premiumRateBps || 0,
-            minPremiumBps: 0,
-            minDuration: durationSeconds,
-            maxDuration: durationSeconds,
-            nonce,
-            expiry: newExpiry,
-            salt,
-            requiresUpfront: true,
-            cancellationPenaltyBps: 0,
-            minFillAmount: '0',
-            whitelistedBuyer: existingQuote.whitelistedBuyer || ethers.ZeroAddress,
-        };
-
-        // Resolve IntentMatcher for signing domain
-        const addresses = CONTRACT_ADDRESSES[this._chainId];
-        const intentMatcher = addresses?.intentOrderBook;
-        if (!intentMatcher || intentMatcher === ethers.ZeroAddress) {
-            throw new Error(`IntentMatcher address not found for chain ${this._chainId}`);
-        }
-
-        const intentDomain = {
-            ...LayerCoverSDK.COVERAGE_INTENT_DOMAIN,
-            chainId: this._chainId,
-            verifyingContract: intentMatcher,
-        };
-
-        const intentValue = {
-            maker: newIntent.maker,
-            poolId: newIntent.poolId,
-            coverageAmount: BigInt(newIntent.coverageAmount),
-            premiumRateBps: newIntent.premiumRateBps,
-            minDuration: newIntent.minDuration,
-            maxDuration: newIntent.maxDuration,
-            nonce: BigInt(newIntent.nonce),
-            expiry: newIntent.expiry,
-            salt: BigInt(newIntent.salt),
-            requiresUpfront: newIntent.requiresUpfront,
-            cancellationPenaltyBps: newIntent.cancellationPenaltyBps,
-            minFillAmount: BigInt(newIntent.minFillAmount),
-            whitelistedBuyer: newIntent.whitelistedBuyer,
-        };
-
-        const intentSignature = await (this.signer as any).signTypedData(
-            intentDomain,
-            LayerCoverSDK.COVERAGE_INTENT_TYPES,
-            intentValue
-        );
-
-        // Submit to PUT — intent signature serves as auth (no separate header needed)
-        const url = `${this._apiBaseUrl}/api/quotes`;
-        const response = await this._fetchApi(url, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                quoteId,
-                coverageIntent: newIntent,
-                intentSignature,
-            }),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `Failed to refresh quote: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const intent = data.coverageIntent || newIntent;
-        return {
-            reserveIntent: intent,
-            signature: data.signature || data.intentSignature || intentSignature,
-        };
+        const quotes = this._normalizeFixedRateQuotes(data.quotes || []);
+        this._emitEvent('quotes_fetched', { poolId, count: quotes.length, source: 'legacy' });
+        return quotes;
     }
 
     /**
@@ -1167,6 +1292,147 @@ export class LayerCoverSDK {
         const quotes = await this.getActiveQuotes(poolId);
         if (quotes.length === 0) return null;
         return quotes[0].premiumRateBps;
+    }
+
+    /**
+     * Get the cheapest active quote that is executable for the requested amount and duration.
+     *
+     * @param poolId The pool ID
+     * @param coverageAmount Desired coverage amount
+     * @param durationWeeks Desired duration in weeks
+     * @param maxRateBps Optional maximum acceptable premium rate
+     * @returns The cheapest executable quote, or null if none can satisfy the request
+     */
+    async getBestExecutableQuote(
+        poolId: number,
+        coverageAmount: bigint,
+        durationWeeks: number,
+        maxRateBps?: number
+    ): Promise<FixedRateQuote | null> {
+        this._assertInteger('poolId', poolId, 0);
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('durationWeeks', durationWeeks, 1);
+
+        const quotes = await this.getActiveQuotes(poolId);
+        for (const quote of quotes) {
+            if (this._getQuoteExecutionBlockers(quote, coverageAmount, durationWeeks, maxRateBps).length === 0) {
+                return quote;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Prepare a full buyer preflight for the current QuoteBook path.
+     * Returns the selected quote, approval/purchase transactions, and structured blockers.
+     *
+     * @param poolId Pool to purchase from
+     * @param coverageAmount Amount of coverage
+     * @param durationWeeks Duration in weeks
+     * @param maxRateBps Optional maximum acceptable rate
+     * @param referralCode Optional referral code (bytes32)
+     * @returns Prepared purchase state including transactions and blockers
+     */
+    async preparePurchase(
+        poolId: number,
+        coverageAmount: bigint,
+        durationWeeks: number,
+        maxRateBps?: number,
+        referralCode?: string
+    ): Promise<PreparedPurchase> {
+        this._assertInteger('poolId', poolId, 0);
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('durationWeeks', durationWeeks, 1);
+
+        const normalizedReferralCode = this._normalizeReferralCode(referralCode);
+        const quotes = await this.getActiveQuotes(poolId);
+        const quote = quotes.find((candidate) =>
+            this._getQuoteExecutionBlockers(candidate, coverageAmount, durationWeeks, maxRateBps).length === 0
+        ) || null;
+
+        if (!quote) {
+            const preparation = this._createBlockedPurchasePreparation(
+                null,
+                coverageAmount,
+                durationWeeks,
+                normalizedReferralCode,
+                this._summarizePurchaseBlockers(quotes, coverageAmount, durationWeeks, maxRateBps)
+            );
+            this._emitPreparedPurchaseEvent(preparation, 'pool');
+            return preparation;
+        }
+
+        const preparation = await this._buildPurchasePreparationForQuote(
+            quote,
+            coverageAmount,
+            durationWeeks,
+            normalizedReferralCode
+        );
+        this._emitPreparedPurchaseEvent(preparation, 'pool');
+        return preparation;
+    }
+
+    /**
+     * Prepare a buyer preflight for a specific quote selected by the integrator.
+     * This preserves quote choice instead of auto-switching to a cheaper executable quote.
+     *
+     * @param quote The exact quote to validate and prepare against
+     * @param coverageAmount Amount of coverage
+     * @param durationWeeks Duration in weeks
+     * @param maxRateBps Optional maximum acceptable rate
+     * @param referralCode Optional referral code (bytes32)
+     * @returns Prepared purchase state for the selected quote
+     */
+    async preparePurchaseFromQuote(
+        quote: FixedRateQuote,
+        coverageAmount: bigint,
+        durationWeeks: number,
+        maxRateBps?: number,
+        referralCode?: string
+    ): Promise<PreparedPurchase> {
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('durationWeeks', durationWeeks, 1);
+
+        const normalizedReferralCode = this._normalizeReferralCode(referralCode);
+        const { quote: liveQuote } = await this._revalidateQuoteSelection(quote);
+        if (!liveQuote) {
+            const preparation = this._createBlockedPurchasePreparation(
+                quote,
+                coverageAmount,
+                durationWeeks,
+                normalizedReferralCode,
+                [{
+                    code: 'QUOTE_STALE',
+                    message: `Quote ${quote.id} is no longer available and must be refreshed before purchase.`,
+                    quoteId: quote.id,
+                }]
+            );
+            this._emitPreparedPurchaseEvent(preparation, 'quote');
+            return preparation;
+        }
+
+        const blockers = this._getQuoteExecutionBlockers(liveQuote, coverageAmount, durationWeeks, maxRateBps);
+        if (blockers.length > 0) {
+            const preparation = this._createBlockedPurchasePreparation(
+                liveQuote,
+                coverageAmount,
+                durationWeeks,
+                normalizedReferralCode,
+                blockers
+            );
+            this._emitPreparedPurchaseEvent(preparation, 'quote');
+            return preparation;
+        }
+
+        const preparation = await this._buildPurchasePreparationForQuote(
+            liveQuote,
+            coverageAmount,
+            durationWeeks,
+            normalizedReferralCode
+        );
+        this._emitPreparedPurchaseEvent(preparation, 'quote');
+        return preparation;
     }
 
     // ========================================================================
@@ -1313,6 +1579,35 @@ export class LayerCoverSDK {
     }
 
     /**
+     * Get the age of a locally cached quote snapshot in milliseconds.
+     *
+     * @param quote The quote to inspect
+     * @returns Quote age in milliseconds, or null if the SDK does not know when it was fetched
+     */
+    static getQuoteAgeMs(quote: FixedRateQuote): number | null {
+        if (!quote.fetchedAt) return null;
+        const fetchedAtMs = new Date(quote.fetchedAt).getTime();
+        if (!Number.isFinite(fetchedAtMs)) return null;
+        return Math.max(0, Date.now() - fetchedAtMs);
+    }
+
+    /**
+     * Check whether a quote snapshot is too old to trust for execution without revalidation.
+     *
+     * A quote is considered stale when it has already expired, or when the SDK fetched it
+     * longer ago than the supplied freshness threshold.
+     *
+     * @param quote The quote to inspect
+     * @param maxAgeMs Maximum acceptable quote age in milliseconds
+     * @returns true if the quote should be refreshed before execution
+     */
+    static isQuoteStale(quote: FixedRateQuote, maxAgeMs = DEFAULT_QUOTE_STALE_MS): boolean {
+        if (LayerCoverSDK.isQuoteExpired(quote)) return true;
+        const quoteAgeMs = LayerCoverSDK.getQuoteAgeMs(quote);
+        return quoteAgeMs !== null && quoteAgeMs > maxAgeMs;
+    }
+
+    /**
      * Fetch only active (non-expired) quotes for a pool, sorted by rate.
      *
      * @param poolId The pool ID
@@ -1327,6 +1622,48 @@ export class LayerCoverSDK {
     async getActiveQuotes(poolId: number): Promise<FixedRateQuote[]> {
         const quotes = await this.getFixedRateQuotes(poolId);
         return quotes.filter(q => !LayerCoverSDK.isQuoteExpired(q) && q.status === 'active');
+    }
+
+    /**
+     * Refresh a previously selected quote against the latest active quotes for its pool.
+     *
+     * Returns the updated quote when it still exists, otherwise null.
+     *
+     * @param quote The previously selected quote
+     * @returns The fresh matching quote, or null if it no longer exists
+     */
+    async refreshSelectedQuote(quote: FixedRateQuote): Promise<FixedRateQuote | null> {
+        const activeQuotes = await this.getActiveQuotes(quote.poolId);
+        const refreshedQuote = this._findMatchingQuote(activeQuotes, quote);
+
+        this._emitEvent('quote_revalidated', {
+            poolId: quote.poolId,
+            quoteId: quote.id,
+            matched: !!refreshedQuote,
+            refreshed: !!refreshedQuote,
+            maxAgeMs: DEFAULT_QUOTE_STALE_MS,
+            quoteAgeMs: LayerCoverSDK.getQuoteAgeMs(quote),
+        });
+
+        return refreshedQuote;
+    }
+
+    /**
+     * Revalidate a quote before purchase if the local snapshot is stale.
+     *
+     * If the quote is still fresh, the original quote is returned. If it is stale, the SDK
+     * fetches active quotes for the same pool and returns the matching live quote when present.
+     *
+     * @param quote The quote to validate
+     * @param options Optional freshness threshold override
+     * @returns The original or refreshed quote, or null if the selected quote is no longer available
+     */
+    async revalidateQuoteForPurchase(
+        quote: FixedRateQuote,
+        options: { maxAgeMs?: number } = {}
+    ): Promise<FixedRateQuote | null> {
+        const result = await this._revalidateQuoteSelection(quote, options.maxAgeMs ?? DEFAULT_QUOTE_STALE_MS);
+        return result.quote;
     }
 
     /**
@@ -1363,43 +1700,20 @@ export class LayerCoverSDK {
         this._assertInteger('orderId', orderId, 0);
         this._assertPositiveBigInt('coverageAmount', coverageAmount);
         this._assertInteger('durationSeconds', durationSeconds, 1);
-        // Validate even though this path is legacy, so callers still get deterministic errors.
-        void referralCode;
-
-        throw new Error(
-            'prepareBuyFromQuoteTx is deprecated for current IntentMatcher deployments. ' +
-            'Use purchase(...) or purchaseWithIntent(...) instead.'
-        );
-    }
-
-    /**
-     * Execute a full purchase flow using the intent system.
-     * Uses the current IntentMatcher `executeMatchedIntent` path.
-     * 
-     * @param quote The quote to purchase from
-     * @param coverageAmount Amount of coverage to purchase
-     * @param durationSeconds Duration in seconds
-     * @param referralCode Optional referral code (bytes32)
-     * @returns Transaction hash and policy ID
-     */
-    async purchaseWithIntent(
-        quote: FixedRateQuote,
-        coverageAmount: bigint,
-        durationSeconds: number,
-        referralCode?: string
-    ): Promise<PurchaseResult> {
-        this._assertInteger('quote.poolId', quote?.poolId, 0);
-        this._assertPositiveBigInt('coverageAmount', coverageAmount);
-        this._assertInteger('durationSeconds', durationSeconds, 1);
-        if (!this.signer) {
-            throw new Error('Signer required for purchase');
-        }
-        if (!this.intentOrderBook) {
-            throw new Error('IntentOrderBook not configured');
-        }
-        await this._assertConfiguredChain();
         const normalizedReferralCode = this._normalizeReferralCode(referralCode);
-        return this._executeQuotePurchase(quote, coverageAmount, durationSeconds, normalizedReferralCode);
+        const purchaseGatewayAddress = await this._resolvePurchaseGatewayAddress();
+        const purchaseRequest = this._encodeQuoteBookPurchaseRequest(
+            BigInt(orderId),
+            coverageAmount,
+            durationSeconds,
+            normalizedReferralCode
+        );
+
+        const purchaseGatewayIface = new ethers.Interface(LayerCoverSDK.PURCHASE_GATEWAY_ABI);
+        return {
+            to: purchaseGatewayAddress,
+            data: purchaseGatewayIface.encodeFunctionData('buy', [purchaseRequest]),
+        };
     }
 
     /**
@@ -1422,14 +1736,10 @@ export class LayerCoverSDK {
         this._assertInteger('poolId', poolId, 0);
         this._assertPositiveBigInt('coverageAmount', coverageAmount);
         this._assertInteger('durationWeeks', durationWeeks, 1);
-        if (!this.signer) throw new Error('Signer required for purchase');
-        if (!this.intentOrderBook) throw new Error('IntentMatcher not configured');
+        if (!this.signer) throw new SignerRequiredError('Signer required for purchase');
         await this._assertConfiguredChain();
         const normalizedReferralCode = this._normalizeReferralCode(referralCode);
-
-        // 1. Fetch available quotes
-        const quotes = await this.getFixedRateQuotes(poolId);
-
+        const quotes = await this.getActiveQuotes(poolId);
         if (quotes.length === 0) {
             throw new NoQuotesAvailableError(
                 `No quotes available for pool ${poolId}. ` +
@@ -1437,63 +1747,484 @@ export class LayerCoverSDK {
             );
         }
 
-        const bestQuote = quotes[0];
+        const selectedQuote = quotes.find((quote) =>
+            this._getQuoteExecutionBlockers(quote, coverageAmount, durationWeeks, maxRateBps).length === 0
+        );
 
-        if (maxRateBps && bestQuote.premiumRateBps > maxRateBps) {
-            throw new RateTooHighError(
-                `Best available rate ${bestQuote.premiumRateBps} bps exceeds max ${maxRateBps} bps`,
-                bestQuote.premiumRateBps,
-                maxRateBps
+        if (!selectedQuote) {
+            const blockers = this._summarizePurchaseBlockers(quotes, coverageAmount, durationWeeks, maxRateBps);
+            if (maxRateBps !== undefined && blockers.some((blocker) => blocker.code === 'RATE_TOO_HIGH')) {
+                throw new RateTooHighError(
+                    `Best available rate ${quotes[0].premiumRateBps} bps exceeds max ${maxRateBps} bps`,
+                    quotes[0].premiumRateBps,
+                    maxRateBps
+                );
+            }
+            throw this._buildPurchaseBlockedError(blockers);
+        }
+
+        return this.purchaseQuote(selectedQuote, coverageAmount, durationWeeks, maxRateBps, normalizedReferralCode);
+    }
+
+    /**
+     * Execute a purchase against a specific quote selected by the integrator.
+     *
+     * @param quote The exact quote to execute against
+     * @param coverageAmount Amount of coverage
+     * @param durationWeeks Duration in weeks
+     * @param maxRateBps Optional maximum acceptable rate
+     * @param referralCode Optional referral code (bytes32)
+     * @returns Transaction hash and policy ID
+     */
+    async purchaseQuote(
+        quote: FixedRateQuote,
+        coverageAmount: bigint,
+        durationWeeks: number,
+        maxRateBps?: number,
+        referralCode?: string
+    ): Promise<PurchaseResult> {
+        this._assertPositiveBigInt('coverageAmount', coverageAmount);
+        this._assertInteger('durationWeeks', durationWeeks, 1);
+        if (!this.signer) throw new SignerRequiredError('Signer required for purchase');
+        await this._assertConfiguredChain();
+
+        const { quote: liveQuote, quoteAgeMs } = await this._revalidateQuoteSelection(quote);
+        if (!liveQuote) {
+            throw new QuoteStaleError(
+                `Quote ${quote.id} is no longer available and must be refreshed before purchase.`,
+                quote.id,
+                DEFAULT_QUOTE_STALE_MS,
+                quoteAgeMs
             );
         }
 
+        const blockers = this._getQuoteExecutionBlockers(liveQuote, coverageAmount, durationWeeks, maxRateBps);
+        if (blockers.length > 0) {
+            if (maxRateBps !== undefined && blockers.some((blocker) => blocker.code === 'RATE_TOO_HIGH')) {
+                throw new RateTooHighError(
+                    `Selected quote rate ${liveQuote.premiumRateBps} bps exceeds max ${maxRateBps} bps`,
+                    liveQuote.premiumRateBps,
+                    maxRateBps
+                );
+            }
+            throw this._buildPurchaseBlockedError(blockers);
+        }
+
+        const normalizedReferralCode = this._normalizeReferralCode(referralCode);
         const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
-        return this._executeQuotePurchase(bestQuote, coverageAmount, durationSeconds, normalizedReferralCode);
+        return this._executeDirectQuoteBookPurchase(liveQuote, coverageAmount, durationSeconds, normalizedReferralCode);
     }
 
-    private async _executeQuotePurchase(
+    private _isQuoteBookQuote(quote: FixedRateQuote): boolean {
+        return quote.quoteSource === 'quotebook'
+            || quote.quoteBookQuoteId !== undefined
+            || quote.quoteBookExtension !== undefined;
+    }
+
+    private _getQuoteMinFillAmount(quote: FixedRateQuote): bigint {
+        if (!quote.minFillAmount) return 0n;
+
+        try {
+            return BigInt(quote.minFillAmount);
+        } catch {
+            return 0n;
+        }
+    }
+
+    private _getQuoteExecutionBlockers(
+        quote: FixedRateQuote,
+        coverageAmount: bigint,
+        durationWeeks: number,
+        maxRateBps?: number
+    ): PurchaseBlocker[] {
+        const blockers: PurchaseBlocker[] = [];
+
+        if (maxRateBps !== undefined && quote.premiumRateBps > maxRateBps) {
+            blockers.push({
+                code: 'RATE_TOO_HIGH',
+                message: `Quote ${quote.id} is ${quote.premiumRateBps} bps, above the max ${maxRateBps} bps.`,
+                quoteId: quote.id,
+            });
+        }
+
+        if (!this._isQuoteBookQuote(quote)) {
+            blockers.push({
+                code: 'NON_EXECUTABLE_QUOTE',
+                message: `Quote ${quote.id} is not an executable QuoteBook quote.`,
+                quoteId: quote.id,
+            });
+        }
+
+        let quoteCapacity = 0n;
+        try {
+            quoteCapacity = BigInt(quote.coverageAmount || '0');
+        } catch {
+            quoteCapacity = 0n;
+        }
+
+        if (coverageAmount > quoteCapacity) {
+            blockers.push({
+                code: 'AMOUNT_EXCEEDS_CAPACITY',
+                message: `Quote ${quote.id} only has ${quote.coverageAmount} of remaining capacity.`,
+                quoteId: quote.id,
+            });
+        }
+
+        const minFillAmount = this._getQuoteMinFillAmount(quote);
+        if (coverageAmount < minFillAmount) {
+            blockers.push({
+                code: 'AMOUNT_BELOW_MIN_FILL',
+                message: `Quote ${quote.id} requires at least ${minFillAmount.toString()} coverage to fill.`,
+                quoteId: quote.id,
+            });
+        }
+
+        if (durationWeeks < quote.minDurationWeeks || durationWeeks > quote.maxDurationWeeks) {
+            blockers.push({
+                code: 'DURATION_OUT_OF_RANGE',
+                message:
+                    `Quote ${quote.id} supports durations between ${quote.minDurationWeeks} and ${quote.maxDurationWeeks} weeks.`,
+                quoteId: quote.id,
+            });
+        }
+
+        return blockers;
+    }
+
+    private _summarizePurchaseBlockers(
+        quotes: FixedRateQuote[],
+        coverageAmount: bigint,
+        durationWeeks: number,
+        maxRateBps?: number
+    ): PurchaseBlocker[] {
+        if (quotes.length === 0) {
+            return [{
+                code: 'NO_ACTIVE_QUOTES',
+                message: 'No active quotes are available for this pool.',
+            }];
+        }
+
+        const blockersByCode = new Map<PurchaseBlockerCode, PurchaseBlocker>();
+        for (const quote of quotes) {
+            for (const blocker of this._getQuoteExecutionBlockers(quote, coverageAmount, durationWeeks, maxRateBps)) {
+                if (!blockersByCode.has(blocker.code)) {
+                    blockersByCode.set(blocker.code, blocker);
+                }
+            }
+        }
+
+        return Array.from(blockersByCode.values());
+    }
+
+    private _findMatchingQuote(quotes: FixedRateQuote[], selectedQuote: FixedRateQuote): FixedRateQuote | null {
+        return quotes.find((candidate) => {
+            if (candidate.id === selectedQuote.id) return true;
+            if (
+                candidate.quoteBookQuoteId
+                && selectedQuote.quoteBookQuoteId
+                && candidate.quoteBookQuoteId === selectedQuote.quoteBookQuoteId
+            ) {
+                return true;
+            }
+            if (
+                candidate.orderId !== undefined
+                && selectedQuote.orderId !== undefined
+                && candidate.orderId === selectedQuote.orderId
+            ) {
+                return true;
+            }
+            return false;
+        }) || null;
+    }
+
+    private async _revalidateQuoteSelection(
+        quote: FixedRateQuote,
+        maxAgeMs = DEFAULT_QUOTE_STALE_MS
+    ): Promise<{
+        quote: FixedRateQuote | null;
+        stale: boolean;
+        quoteAgeMs: number | null;
+    }> {
+        const quoteAgeMs = LayerCoverSDK.getQuoteAgeMs(quote);
+        const stale = LayerCoverSDK.isQuoteStale(quote, maxAgeMs);
+
+        if (!stale) {
+            return { quote, stale: false, quoteAgeMs };
+        }
+
+        const refreshedQuote = await this.refreshSelectedQuote(quote);
+        return {
+            quote: refreshedQuote,
+            stale: true,
+            quoteAgeMs,
+        };
+    }
+
+    private _createBlockedPurchasePreparation(
+        quote: FixedRateQuote | null,
+        coverageAmount: bigint,
+        durationWeeks: number,
+        referralCode: string,
+        blockers: PurchaseBlocker[]
+    ): PreparedPurchaseBlocked {
+        return {
+            status: 'blocked',
+            quote,
+            coverageAmount,
+            durationWeeks,
+            durationSeconds: durationWeeks * 7 * 24 * 60 * 60,
+            referralCode,
+            blockers,
+        };
+    }
+
+    private async _buildPurchasePreparationForQuote(
+        quote: FixedRateQuote,
+        coverageAmount: bigint,
+        durationWeeks: number,
+        referralCode: string
+    ): Promise<PreparedPurchase> {
+        const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
+        const minFillAmount = this._getQuoteMinFillAmount(quote);
+        const premium = this.calculatePremium(coverageAmount, quote.premiumRateBps, durationSeconds);
+        const preview = await this._previewDirectQuoteBookPurchase(quote, coverageAmount, durationSeconds);
+        const quoteBookQuoteId = String(this._resolveQuoteBookQuoteId(quote));
+        const purchaseTx = await this.prepareBuyFromQuoteTx(
+            Number(this._resolveQuoteBookQuoteId(quote)),
+            coverageAmount,
+            durationSeconds,
+            referralCode
+        );
+
+        const basePreparation = {
+            quote,
+            coverageAmount,
+            durationWeeks,
+            durationSeconds,
+            referralCode,
+            blockers: [] as [],
+            quoteBookQuoteId,
+            purchaseGatewayAddress: preview.purchaseGatewayAddress,
+            paymentTokenAddress: preview.paymentTokenAddress,
+            requiresUpfront: preview.requiresUpfront,
+            minFillAmount,
+            premium,
+            premiumDeposit: preview.premiumDeposit,
+            approvalAmount: preview.premiumDeposit,
+            purchaseTx,
+        };
+
+        if (!this.signer) {
+            return {
+                status: 'signer_required',
+                ...basePreparation,
+                blockers: [{
+                    code: 'SIGNER_REQUIRED',
+                    message: 'A signer is required to execute approval and purchase transactions.',
+                }],
+                approvalTx: await this.prepareApprovalTx(quote.poolId, preview.premiumDeposit),
+            };
+        }
+
+        try {
+            await this._assertConfiguredChain();
+        } catch (error: any) {
+            return {
+                status: 'chain_mismatch',
+                ...basePreparation,
+                blockers: [{
+                    code: 'CHAIN_MISMATCH',
+                    message: error?.message || 'Signer is connected to the wrong chain for this deployment.',
+                }],
+                approvalTx: await this.prepareApprovalTx(quote.poolId, preview.premiumDeposit),
+            };
+        }
+
+        const signerAddress = await this.signer.getAddress();
+        const allowance = await this._getTokenAllowance(
+            preview.paymentTokenAddress,
+            signerAddress,
+            preview.purchaseGatewayAddress
+        );
+
+        if (allowance < preview.premiumDeposit) {
+            return {
+                status: 'approval_required',
+                ...basePreparation,
+                approvalNeeded: true,
+                approvalTx: await this.prepareApprovalTx(quote.poolId, preview.premiumDeposit),
+            };
+        }
+
+        return {
+            status: 'ready',
+            ...basePreparation,
+            approvalNeeded: false,
+        };
+    }
+
+    private _resolveQuoteBookQuoteId(quote: FixedRateQuote): bigint {
+        const rawQuoteId = quote.quoteBookQuoteId ?? quote.orderId;
+        if (rawQuoteId === undefined || rawQuoteId === null || rawQuoteId === '') {
+            throw new Error('Selected quote is missing an on-chain QuoteBook quote id');
+        }
+
+        try {
+            return BigInt(rawQuoteId);
+        } catch {
+            throw new Error(`Selected quote has an invalid QuoteBook quote id: ${String(rawQuoteId)}`);
+        }
+    }
+
+    private _encodeQuoteBookPurchaseRequest(
+        quoteId: bigint,
+        coverageAmount: bigint,
+        durationSeconds: number,
+        referralCode: string
+    ): string {
+        return ethers.AbiCoder.defaultAbiCoder().encode(
+            [
+                'tuple(uint256 quoteId, uint256 coverageAmount, uint64 duration, bytes32 referralCode, address vault, uint256 sharesToCover, bytes extensionData)',
+            ],
+            [[
+                quoteId,
+                coverageAmount,
+                BigInt(durationSeconds),
+                referralCode,
+                ethers.ZeroAddress,
+                0n,
+                '0x',
+            ]]
+        );
+    }
+
+    private async _resolveQuoteBookExtensionAddress(quote?: FixedRateQuote): Promise<string> {
+        const candidateFromQuote = quote?.quoteBookExtension;
+        if (candidateFromQuote && candidateFromQuote !== ethers.ZeroAddress) {
+            this._quoteBookExtensionAddress = candidateFromQuote;
+            return candidateFromQuote;
+        }
+
+        if (this._quoteBookExtensionAddress && this._quoteBookExtensionAddress !== ethers.ZeroAddress) {
+            return this._quoteBookExtensionAddress;
+        }
+
+        if (!this._systemRegistryAddress || this._systemRegistryAddress === ethers.ZeroAddress) {
+            throw new Error(
+                `QuoteBookExtension is not configured for deployment ${this._deployment}. ` +
+                'Pass quoteBookExtensionAddress/systemRegistryAddress or use a deployment that exposes PurchaseGateway.'
+            );
+        }
+
+        const registry = new Contract(
+            this._systemRegistryAddress,
+            LayerCoverSDK.SYSTEM_REGISTRY_ABI,
+            this.provider
+        );
+        const extensionAddress = await registry.getSystemContract(LayerCoverSDK.PURCHASE_EXTENSION_SYSTEM_ID).catch((error: any) => {
+            throw new Error(
+                `Failed to resolve QuoteBookExtension from SystemRegistry: ${error?.message || String(error)}`
+            );
+        });
+
+        if (!extensionAddress || extensionAddress === ethers.ZeroAddress) {
+            throw new Error(`QuoteBookExtension is not registered in SystemRegistry for deployment ${this._deployment}`);
+        }
+
+        this._quoteBookExtensionAddress = extensionAddress;
+        return extensionAddress;
+    }
+
+    private async _resolvePurchaseGatewayAddress(quote?: FixedRateQuote): Promise<string> {
+        if (this._purchaseGatewayAddress && this._purchaseGatewayAddress !== ethers.ZeroAddress) {
+            return this._purchaseGatewayAddress;
+        }
+
+        const quoteBookExtensionAddress = await this._resolveQuoteBookExtensionAddress(quote);
+        const quoteBookExtension = new Contract(
+            quoteBookExtensionAddress,
+            LayerCoverSDK.QUOTE_BOOK_EXTENSION_RUNTIME_ABI,
+            this.provider
+        );
+        const gatewayAddress = await quoteBookExtension.GATEWAY().catch((error: any) => {
+            throw new Error(`Failed to resolve PurchaseGateway from QuoteBookExtension: ${error?.message || String(error)}`);
+        });
+
+        if (!gatewayAddress || gatewayAddress === ethers.ZeroAddress) {
+            throw new Error(`PurchaseGateway is not configured for deployment ${this._deployment}`);
+        }
+
+        this._purchaseGatewayAddress = gatewayAddress;
+        return gatewayAddress;
+    }
+
+    private async _previewDirectQuoteBookPurchase(
+        quote: FixedRateQuote,
+        coverageAmount: bigint,
+        durationSeconds: number
+    ): Promise<{
+        purchaseGatewayAddress: string;
+        paymentTokenAddress: string;
+        premiumDeposit: bigint;
+        requiresUpfront: boolean;
+    }> {
+        const purchaseGatewayAddress = await this._resolvePurchaseGatewayAddress(quote);
+        const purchaseGateway = new Contract(
+            purchaseGatewayAddress,
+            LayerCoverSDK.PURCHASE_GATEWAY_ABI,
+            this.provider
+        );
+
+        const requiresUpfront = quote.requiresUpfront ?? true;
+        const premiumDeposit: bigint = await purchaseGateway.previewRequiredDeposit(
+            coverageAmount,
+            quote.premiumRateBps,
+            durationSeconds,
+            requiresUpfront
+        );
+        const paymentTokenAddress = await this.getPaymentToken(quote.poolId);
+
+        return {
+            purchaseGatewayAddress,
+            paymentTokenAddress,
+            premiumDeposit,
+            requiresUpfront,
+        };
+    }
+
+    private async _getTokenAllowance(
+        tokenAddress: string,
+        owner: string,
+        spender: string
+    ): Promise<bigint> {
+        const tokenContract = new Contract(
+            tokenAddress,
+            ['function allowance(address owner, address spender) view returns (uint256)'],
+            this.provider
+        );
+
+        return tokenContract.allowance(owner, spender);
+    }
+
+    private async _executeDirectQuoteBookPurchase(
         quote: FixedRateQuote,
         coverageAmount: bigint,
         durationSeconds: number,
         normalizedReferralCode: string
     ): Promise<PurchaseResult> {
-        if (!this.signer) throw new Error('Signer required for purchase');
-        if (!this.intentOrderBook) throw new Error('IntentMatcher not configured');
+        if (!this.signer) throw new SignerRequiredError('Signer required for purchase');
 
+        const quoteBookQuoteId = this._resolveQuoteBookQuoteId(quote);
         const signerAddress = await this.signer.getAddress();
-        const intentMatcherAddress = await this.intentOrderBook.getAddress();
-        const now = Math.floor(Date.now() / 1000);
+        const preview = await this._previewDirectQuoteBookPurchase(quote, coverageAmount, durationSeconds);
+        const purchaseGatewayAddress = preview.purchaseGatewayAddress;
+        const purchaseGateway = new Contract(
+            purchaseGatewayAddress,
+            LayerCoverSDK.PURCHASE_GATEWAY_ABI,
+            this.signer
+        );
 
-        // 1. Refresh quote to get a fresh signed CoverageIntent from the backend.
-        const refreshResponse = await this._fetchApi(`${this._apiBaseUrl}/api/quotes`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                quoteId: quote.id,
-                amount: coverageAmount.toString(),
-                duration: durationSeconds,
-                chainId: this._chainId,
-            }),
-        });
-
-        if (!refreshResponse.ok) {
-            const errorData = await refreshResponse.json().catch(() => ({}));
-            throw new Error(errorData.error || `Failed to refresh quote: ${refreshResponse.status}`);
-        }
-
-        const refreshData = await refreshResponse.json();
-        const intentSignature = refreshData.intentSignature;
-        if (!intentSignature) {
-            throw new Error('Quote refresh failed: missing intent signature');
-        }
-        const sellerIntent = this._coerceCoverageIntent(refreshData.coverageIntent);
-
-        // 2. Calculate premium with 5% buffer (uses module-level SECS_YEAR / BPS)
-        const premium = this.calculatePremium(coverageAmount, quote.premiumRateBps, durationSeconds);
-        const premiumWithBuffer = (premium * 105n) / 100n;
-
-        // 3. Approve IntentMatcher to spend premium (ERC20 transferFrom path).
-        const paymentToken = await this.getPaymentToken(quote.poolId);
+        const paymentToken = preview.paymentTokenAddress;
         const tokenContract = new Contract(
             paymentToken,
             [
@@ -1503,155 +2234,102 @@ export class LayerCoverSDK {
             this.signer
         );
 
-        const allowance = await tokenContract.allowance(signerAddress, intentMatcherAddress);
-        if (allowance < premiumWithBuffer) {
-            this._log.debug('[LayerCover SDK] Approving premium spend…');
-            const approveTx = await tokenContract.approve(intentMatcherAddress, ethers.MaxUint256);
+        const allowance = await tokenContract.allowance(signerAddress, purchaseGatewayAddress);
+        if (allowance < preview.premiumDeposit) {
+            this._log.debug('[LayerCover SDK] Approving PurchaseGateway spend…');
+            const approveTx = await tokenContract.approve(purchaseGatewayAddress, ethers.MaxUint256);
+            this._emitEvent('approval_submitted', {
+                quoteId: quote.id,
+                txHash: approveTx.hash,
+                approvalAmount: ethers.MaxUint256.toString(),
+                requiredAmount: preview.premiumDeposit.toString(),
+                tokenAddress: paymentToken,
+                spender: purchaseGatewayAddress,
+            });
             await this._waitForTx(approveTx);
             this._log.debug('[LayerCover SDK] Approval confirmed');
+            this._emitEvent('approval_confirmed', {
+                quoteId: quote.id,
+                txHash: approveTx.hash,
+            });
         }
 
-        // 4. Build and sign buy order (matches latest CoverageBuyOrder struct).
-        const buyerOrder = {
-            taker: signerAddress,
-            poolId: quote.poolId,
+        const purchaseRequest = this._encodeQuoteBookPurchaseRequest(
+            quoteBookQuoteId,
             coverageAmount,
-            maxPremiumRateBps: Math.round(quote.premiumRateBps * 1.05), // 5% slippage
-            duration: durationSeconds,
-            premiumDeposit: premiumWithBuffer,
-            nonce: LayerCoverSDK._randomUint(12),
-            expiry: now + 3600, // 1 hour
-            salt: LayerCoverSDK._randomUint(32),
-            referralCode: normalizedReferralCode,
-            vault: ethers.ZeroAddress,
-            sharesToCover: 0n,
-        };
-
-        const domain = {
-            name: 'IntentMatcher',
-            version: '1',
-            chainId: this._chainId,
-            verifyingContract: intentMatcherAddress,
-        };
-
-        this._log.debug('[LayerCover SDK] Signing buy order (EIP-712)…');
-        const orderSignature = await this.signer.signTypedData(
-            domain,
-            LayerCoverSDK.COVERAGE_BUY_ORDER_TYPES,
-            buyerOrder
+            durationSeconds,
+            normalizedReferralCode
         );
 
-        // 5. Execute matched intent (Permit2 params intentionally empty for approval/transferFrom path).
-        const intentMatcher = new Contract(intentMatcherAddress, LayerCoverSDK.EXECUTE_MATCHED_INTENT_ABI, this.signer);
-        this._log.debug('[LayerCover SDK] Executing purchase…');
-        const tx = await intentMatcher.executeMatchedIntent(
-            [sellerIntent],
-            [intentSignature],
-            buyerOrder,
-            orderSignature,
-            [coverageAmount],
-            ethers.ZeroAddress, // vault
-            0, // sharesToCover
-            0, // permit2Nonce
-            0, // permit2Deadline
-            '0x' // permit2Signature
-        );
+        this._log.debug('[LayerCover SDK] Executing direct QuoteBook purchase…');
+        const tx = await purchaseGateway.buy(purchaseRequest);
+        this._emitEvent('purchase_submitted', {
+            quoteId: quote.id,
+            txHash: tx.hash,
+            quoteBookQuoteId: quoteBookQuoteId.toString(),
+            coverageAmount: coverageAmount.toString(),
+            durationSeconds,
+        });
         const receipt = await this._waitForTx(tx);
-        this._log.debug('[LayerCover SDK] Purchase confirmed:', tx.hash);
+        this._log.debug('[LayerCover SDK] Direct purchase confirmed:', tx.hash);
 
-        // 6. Extract policyId from emitted events.
-        const policyCreatedIface = new ethers.Interface([
+        const { policyId, policyLogIndex } = this._extractPolicyResultFromReceipt(receipt);
+        this._emitEvent('purchase_confirmed', {
+            quoteId: quote.id,
+            txHash: tx.hash,
+            policyId: policyId ?? null,
+            quoteBookQuoteId: quoteBookQuoteId.toString(),
+        });
+        await this._syncFilledQuote(quote.id, tx.hash, coverageAmount, policyId, policyLogIndex).catch((error: any) => {
+            this._log.warn('[LayerCover SDK] Failed to sync filled quote:', error?.message || String(error));
+            this._emitEvent('purchase_sync_failed', {
+                quoteId: quote.id,
+                txHash: tx.hash,
+                policyId: policyId ?? null,
+                error: error?.message || String(error),
+            });
+        });
+
+        return { txHash: tx.hash, policyId };
+    }
+
+    private _extractPolicyResultFromReceipt(receipt: ethers.TransactionReceipt): {
+        policyId?: string;
+        policyLogIndex?: number;
+    } {
+        const iface = new ethers.Interface([
             'event PolicyCreated(uint256 indexed policyId, address indexed holder, uint256 poolId)',
             'event IntentPolicyCreated(uint256 indexed policyId, address indexed buyer, address indexed underwriter, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 duration, bytes32 reservationKey)',
             'event IntentMatched(address indexed underwriter, address indexed buyer, uint256 indexed poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 duration, uint256 policyId)',
+            'event PurchaseExecuted(address indexed extension, address indexed buyer, address indexed underwriter, uint256 policyId, uint256 poolId, uint256 coverageAmount, uint256 premiumDeposit, uint16 premiumRateBps, uint64 duration)',
         ]);
-        let policyId: string | undefined;
-        let policyLogIndex: number | undefined;
+
         for (const log of receipt.logs) {
             try {
-                const parsed = policyCreatedIface.parseLog(log);
+                const parsed = iface.parseLog(log);
                 if (!parsed) continue;
-                if (parsed.name === 'PolicyCreated' || parsed.name === 'IntentPolicyCreated' || parsed.name === 'IntentMatched') {
-                    policyId = parsed.args.policyId.toString();
+                if (
+                    parsed.name === 'PolicyCreated'
+                    || parsed.name === 'IntentPolicyCreated'
+                    || parsed.name === 'IntentMatched'
+                    || parsed.name === 'PurchaseExecuted'
+                ) {
+                    const policyId = parsed.args.policyId.toString();
                     const maybeIndex = (log as { index?: unknown }).index;
-                    if (typeof maybeIndex === 'number' && Number.isInteger(maybeIndex) && maybeIndex >= 0) {
-                        policyLogIndex = maybeIndex;
-                    }
-                    break;
+                    return {
+                        policyId,
+                        policyLogIndex:
+                            typeof maybeIndex === 'number' && Number.isInteger(maybeIndex) && maybeIndex >= 0
+                                ? maybeIndex
+                                : undefined,
+                    };
                 }
             } catch {
                 continue;
             }
         }
 
-        await this._syncFilledQuote(quote.id, tx.hash, coverageAmount, policyId, policyLogIndex);
-        return { txHash: tx.hash, policyId };
-    }
-
-    private _coerceCoverageIntent(raw: any): {
-        maker: string;
-        poolId: number;
-        coverageAmount: bigint;
-        premiumRateBps: number;
-        minDuration: number;
-        maxDuration: number;
-        nonce: bigint;
-        expiry: number;
-        salt: bigint;
-        requiresUpfront: boolean;
-        cancellationPenaltyBps: number;
-        minFillAmount: bigint;
-        whitelistedBuyer: string;
-    } {
-        if (!raw || typeof raw !== 'object') {
-            throw new Error('Quote refresh failed: missing coverageIntent');
-        }
-
-        const maker = raw.maker;
-        const poolId = Number(raw.poolId);
-        const coverageAmount = BigInt(raw.coverageAmount);
-        const premiumRateBps = Number(raw.premiumRateBps);
-        const minDuration = Number(raw.minDuration);
-        const maxDuration = Number(raw.maxDuration);
-        const nonce = BigInt(raw.nonce);
-        const expiry = Number(raw.expiry);
-        const salt = BigInt(raw.salt);
-        const requiresUpfront = raw.requiresUpfront ?? true;
-        const cancellationPenaltyBps = Number(raw.cancellationPenaltyBps ?? 0);
-        const minFillAmount = BigInt(raw.minFillAmount ?? 0);
-        const whitelistedBuyer = raw.whitelistedBuyer || ethers.ZeroAddress;
-
-        if (!maker || !ethers.isAddress(maker)) {
-            throw new Error('Quote refresh returned incompatible intent: missing maker');
-        }
-        if (!Number.isInteger(poolId) || poolId < 0) {
-            throw new Error('Quote refresh returned incompatible intent: invalid poolId');
-        }
-        if (!Number.isInteger(premiumRateBps) || premiumRateBps <= 0) {
-            throw new Error('Quote refresh returned incompatible intent: invalid premiumRateBps');
-        }
-        if (!Number.isInteger(minDuration) || minDuration <= 0 || !Number.isInteger(maxDuration) || maxDuration <= 0) {
-            throw new Error('Quote refresh returned incompatible intent: invalid duration bounds');
-        }
-        if (!Number.isInteger(expiry) || expiry <= 0) {
-            throw new Error('Quote refresh returned incompatible intent: invalid expiry');
-        }
-
-        return {
-            maker,
-            poolId,
-            coverageAmount,
-            premiumRateBps,
-            minDuration,
-            maxDuration,
-            nonce,
-            expiry,
-            salt,
-            requiresUpfront: Boolean(requiresUpfront),
-            cancellationPenaltyBps,
-            minFillAmount,
-            whitelistedBuyer,
-        };
+        return {};
     }
 
     private async _syncFilledQuote(
@@ -1693,400 +2371,29 @@ export class LayerCoverSDK {
                 || `purchase/sync HTTP ${syncResponse.status}`
             );
         }
+
+        this._emitEvent('purchase_sync_succeeded', {
+            quoteId,
+            txHash,
+            policyId: policyId ?? null,
+        });
     }
 
-    // ========================================================================
-    // QUOTE SUBMISSION (FOR SYNDICATES/UNDERWRITERS)
-    // ========================================================================
-
-    /**
-     * EIP-712 domain for Reserve Intent signing
-     */
-    private static readonly RESERVE_INTENT_DOMAIN = {
-        name: 'Syndicate',
-        version: '1',
-    };
-
-    /**
-     * EIP-712 types for Reserve Intent
-     */
-    private static readonly RESERVE_INTENT_TYPES = {
-        ReserveIntent: [
-            { name: 'solver', type: 'address' },
-            { name: 'underwriter', type: 'address' },
-            { name: 'poolId', type: 'uint256' },
-            { name: 'minCoverageDuration', type: 'uint32' },
-            { name: 'maxCoverageDuration', type: 'uint32' },
-            { name: 'coverageAmount', type: 'uint256' },
-            { name: 'minFillAmount', type: 'uint256' },
-            { name: 'allowPartialFill', type: 'bool' },
-            { name: 'reservationExpiry', type: 'uint64' },
-            { name: 'nonce', type: 'uint96' },
-            { name: 'whitelistedBuyer', type: 'address' },
-            { name: 'minPremiumBps', type: 'uint16' },
-            { name: 'cancellationPenaltyBps', type: 'uint16' },
-        ],
-    };
-
-    /**
-     * EIP-712 domain for Coverage Intent signing
-     */
-    private static readonly COVERAGE_INTENT_DOMAIN = {
-        name: 'IntentMatcher',
-        version: '1',
-    };
-
-    /**
-     * EIP-712 domain for Orderbook Auth
-     */
-    private static readonly ORDERBOOK_AUTH_DOMAIN = {
-        name: 'LayerCoverOrderbook',
-        version: '1',
-    };
-
-    /**
-     * EIP-712 types for Orderbook Auth
-     */
-    private static readonly ORDERBOOK_AUTH_TYPES = {
-        OrderbookAuth: [
-            { name: 'action', type: 'string' },
-            { name: 'syndicateAddress', type: 'address' },
-            { name: 'timestamp', type: 'uint256' },
-        ],
-    };
-
-    /**
-     * EIP-712 types for Coverage Intent
-     */
-    private static readonly COVERAGE_INTENT_TYPES = {
-        CoverageIntent: [
-            { name: 'maker', type: 'address' },
-            { name: 'poolId', type: 'uint256' },
-            { name: 'coverageAmount', type: 'uint256' },
-            { name: 'premiumRateBps', type: 'uint256' },
-            { name: 'minDuration', type: 'uint256' },
-            { name: 'maxDuration', type: 'uint256' },
-            { name: 'nonce', type: 'uint256' },
-            { name: 'expiry', type: 'uint256' },
-            { name: 'salt', type: 'uint256' },
-            { name: 'requiresUpfront', type: 'bool' },
-            { name: 'cancellationPenaltyBps', type: 'uint16' },
-            { name: 'minFillAmount', type: 'uint256' },
-            { name: 'whitelistedBuyer', type: 'address' },
-        ],
-    };
-
-    /**
-     * EIP-712 types for buyer orders (must match IIntentMatcher.CoverageBuyOrder).
-     */
-    private static readonly COVERAGE_BUY_ORDER_TYPES = {
-        CoverageBuyOrder: [
-            { name: 'taker', type: 'address' },
-            { name: 'poolId', type: 'uint256' },
-            { name: 'coverageAmount', type: 'uint256' },
-            { name: 'maxPremiumRateBps', type: 'uint256' },
-            { name: 'duration', type: 'uint256' },
-            { name: 'premiumDeposit', type: 'uint256' },
-            { name: 'nonce', type: 'uint256' },
-            { name: 'expiry', type: 'uint256' },
-            { name: 'salt', type: 'uint256' },
-            { name: 'referralCode', type: 'bytes32' },
-            { name: 'vault', type: 'address' },
-            { name: 'sharesToCover', type: 'uint256' },
-        ],
-    };
-
-    private static readonly EXECUTE_MATCHED_INTENT_ABI = [
-        'function executeMatchedIntent(tuple(address maker, uint256 poolId, uint256 coverageAmount, uint256 premiumRateBps, uint256 minDuration, uint256 maxDuration, uint256 nonce, uint256 expiry, uint256 salt, bool requiresUpfront, uint16 cancellationPenaltyBps, uint256 minFillAmount, address whitelistedBuyer)[] intents, bytes[] intentSignatures, tuple(address taker, uint256 poolId, uint256 coverageAmount, uint256 maxPremiumRateBps, uint256 duration, uint256 premiumDeposit, uint256 nonce, uint256 expiry, uint256 salt, bytes32 referralCode, address vault, uint256 sharesToCover) order, bytes orderSignature, uint256[] fillAmounts, address vault, uint256 sharesToCover, uint256 permit2Nonce, uint256 permit2Deadline, bytes permit2Signature) returns (uint256[])',
+    private static readonly PURCHASE_GATEWAY_ABI = [
+        'function buy(bytes purchaseRequest) returns (uint256)',
+        'function previewRequiredDeposit(uint256 coverageAmount, uint16 premiumRateBps, uint64 duration, bool requiresUpfront) view returns (uint256)',
     ];
 
-    /**
-     * Create a Base64-encoded auth header for write endpoints.
-     * @internal
-     */
-    private async _createAuthHeader(action: string, syndicateAddress: string): Promise<string> {
-        if (!this.signer) {
-            throw new Error('Signer required for authenticated endpoints');
-        }
-        const timestamp = Math.floor(Date.now() / 1000);
-        const signature = await (this.signer as any).signTypedData(
-            LayerCoverSDK.ORDERBOOK_AUTH_DOMAIN,
-            LayerCoverSDK.ORDERBOOK_AUTH_TYPES,
-            { action, syndicateAddress, timestamp }
-        );
-        const payload = JSON.stringify({ action, syndicateAddress, timestamp, signature });
-        // Use btoa for browser + Buffer for Node
-        const encoded = typeof btoa === 'function'
-            ? btoa(payload)
-            : Buffer.from(payload).toString('base64');
-        return `Bearer ${encoded}`;
-    }
+    private static readonly QUOTE_BOOK_EXTENSION_RUNTIME_ABI = [
+        'function GATEWAY() view returns (address)',
+    ];
 
-    /**
-     * Submit a new coverage quote to the orderbook.
-     * This allows syndicates to programmatically provide liquidity.
-     * 
-     * The signer must be the syndicate manager or an authorized solver.
-     * 
-     * @param params Quote parameters
-     * @returns Quote submission result with signatures
-     * 
-     * @example
-     * ```typescript
-     * const sdk = new LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl: 'https://app.layercover.com' });
-     * 
-     * const result = await sdk.submitQuote({
-     *     poolId: 1,
-     *     syndicateAddress: '0x...',
-     *     coverageAmount: ethers.parseUnits('10000', 6), // 10,000 USDC
-     *     premiumRateBps: 500, // 5% APY
-     *     minDurationWeeks: 4,
-     *     maxDurationWeeks: 12,
-     * });
-     * 
-     * console.log('Quote submitted:', result.quoteId);
-     * ```
-     */
-    async submitQuote(params: {
-        poolId: number;
-        syndicateAddress: string;
-        coverageAmount: bigint;
-        premiumRateBps: number;
-        minDurationWeeks: number;
-        maxDurationWeeks: number;
-        allowPartialFill?: boolean;
-        minFillAmount?: bigint;
-        expiryHours?: number;
-        whitelistedBuyer?: string;
-        intentMatcherAddress?: string;
-    }): Promise<{
-        quoteId: string;
-        quote: FixedRateQuote;
-        reserveIntent: ReserveIntent;
-        coverageIntent: any;
-        reserveSignature: string;
-        intentSignature: string;
-    }> {
-        if (!this.signer) {
-            throw new Error('Signer required to submit quotes');
-        }
+    private static readonly SYSTEM_REGISTRY_ABI = [
+        'function getSystemContract(bytes32 id) view returns (address)',
+    ];
 
-        const {
-            poolId,
-            syndicateAddress,
-            coverageAmount,
-            premiumRateBps,
-            minDurationWeeks,
-            maxDurationWeeks,
-            allowPartialFill = false,
-            minFillAmount,
-            expiryHours = 24,
-            whitelistedBuyer = ethers.ZeroAddress,
-            intentMatcherAddress,
-        } = params;
-        this._assertInteger('poolId', poolId, 0);
-        this._assertPositiveBigInt('coverageAmount', coverageAmount);
-        this._assertInteger('premiumRateBps', premiumRateBps, 1);
-        this._assertInteger('minDurationWeeks', minDurationWeeks, 1);
-        this._assertInteger('maxDurationWeeks', maxDurationWeeks, minDurationWeeks);
-        this._assertInteger('expiryHours', expiryHours, 1);
-
-        const signerAddress = await this.signer.getAddress();
-        const network = await this.provider.getNetwork();
-        const chainId = Number(network.chainId);
-        if (chainId !== this._chainId) {
-            throw this._createChainMismatchError(chainId);
-        }
-
-        // Calculate durations in seconds
-        const minCoverageDuration = minDurationWeeks * 7 * 24 * 60 * 60;
-        const maxCoverageDuration = maxDurationWeeks * 7 * 24 * 60 * 60;
-
-        // Calculate expiry
-        const reservationExpiry = Math.floor(Date.now() / 1000) + expiryHours * 60 * 60;
-
-        // Generate nonce and salt
-        const nonce = LayerCoverSDK._randomUint(12).toString();
-        const salt = ethers.hexlify(ethers.randomBytes(32));
-
-        // Create Reserve Intent
-        const reserveIntent: ReserveIntent = {
-            solver: signerAddress,
-            underwriter: syndicateAddress,
-            poolId,
-            minCoverageDuration,
-            maxCoverageDuration,
-            coverageAmount: coverageAmount.toString(),
-            minFillAmount: (minFillAmount ?? (allowPartialFill ? 0n : coverageAmount)).toString(),
-            allowPartialFill,
-            reservationExpiry,
-            nonce,
-            whitelistedBuyer,
-            minPremiumBps: premiumRateBps, // Use premium rate as the floor
-            cancellationPenaltyBps: 0, // No early cancellation penalty by default
-        };
-
-        // Sign Reserve Intent
-        const reserveDomain = {
-            ...LayerCoverSDK.RESERVE_INTENT_DOMAIN,
-            chainId,
-            verifyingContract: syndicateAddress,
-        };
-
-        const reserveValue = {
-            solver: reserveIntent.solver,
-            underwriter: reserveIntent.underwriter,
-            poolId: reserveIntent.poolId,
-            minCoverageDuration: reserveIntent.minCoverageDuration,
-            maxCoverageDuration: reserveIntent.maxCoverageDuration,
-            coverageAmount: BigInt(reserveIntent.coverageAmount),
-            minFillAmount: BigInt(reserveIntent.minFillAmount),
-            allowPartialFill: reserveIntent.allowPartialFill,
-            reservationExpiry: reserveIntent.reservationExpiry,
-            nonce: BigInt(reserveIntent.nonce),
-            whitelistedBuyer: reserveIntent.whitelistedBuyer || ethers.ZeroAddress,
-            minPremiumBps: reserveIntent.minPremiumBps,
-            cancellationPenaltyBps: reserveIntent.cancellationPenaltyBps,
-        };
-
-        const reserveSignature = await (this.signer as any).signTypedData(
-            reserveDomain,
-            LayerCoverSDK.RESERVE_INTENT_TYPES,
-            reserveValue
-        );
-
-        // Create Coverage Intent
-        const coverageIntent = {
-            maker: syndicateAddress,
-            poolId,
-            coverageAmount: coverageAmount.toString(),
-            premiumRateBps,
-            minPremiumBps: 0,
-            minDuration: minCoverageDuration,
-            maxDuration: maxCoverageDuration,
-            nonce,
-            expiry: reservationExpiry,
-            salt,
-            requiresUpfront: true,
-            cancellationPenaltyBps: 0,
-            minFillAmount: (minFillAmount ?? (allowPartialFill ? 0n : coverageAmount)).toString(),
-            whitelistedBuyer: whitelistedBuyer || ethers.ZeroAddress,
-        };
-
-        // Resolve IntentMatcher address
-        let intentMatcher = intentMatcherAddress;
-        if (!intentMatcher) {
-            const addresses = CONTRACT_ADDRESSES[chainId];
-            intentMatcher = addresses?.intentOrderBook;
-        }
-
-        if (!intentMatcher || intentMatcher === ethers.ZeroAddress) {
-            throw new Error(`IntentMatcher address not found for chain ${chainId}. Provide intentMatcherAddress in params.`);
-        }
-
-        // Sign Coverage Intent
-        const intentDomain = {
-            ...LayerCoverSDK.COVERAGE_INTENT_DOMAIN,
-            chainId,
-            verifyingContract: intentMatcher,
-        };
-
-        const intentValue = {
-            maker: coverageIntent.maker,
-            poolId: coverageIntent.poolId,
-            coverageAmount: BigInt(coverageIntent.coverageAmount),
-            premiumRateBps: coverageIntent.premiumRateBps,
-            minDuration: coverageIntent.minDuration,
-            maxDuration: coverageIntent.maxDuration,
-            nonce: BigInt(coverageIntent.nonce),
-            expiry: coverageIntent.expiry,
-            salt: BigInt(coverageIntent.salt),
-            requiresUpfront: coverageIntent.requiresUpfront,
-            cancellationPenaltyBps: coverageIntent.cancellationPenaltyBps,
-            minFillAmount: BigInt(coverageIntent.minFillAmount),
-            whitelistedBuyer: coverageIntent.whitelistedBuyer,
-        };
-
-        const intentSignature = await (this.signer as any).signTypedData(
-            intentDomain,
-            LayerCoverSDK.COVERAGE_INTENT_TYPES,
-            intentValue
-        );
-
-        // Submit to API
-        const quoteData = {
-            poolId,
-            deployment: this._deployment,
-            syndicateAddress,
-            coverageAmount: coverageAmount.toString(),
-            premiumRateBps,
-            minDurationWeeks,
-            maxDurationWeeks,
-            whitelistedBuyer: whitelistedBuyer !== ethers.ZeroAddress ? whitelistedBuyer : undefined,
-            reserveIntent,
-            signature: reserveSignature,
-            coverageIntent,
-            intentSignature,
-            createdAt: new Date().toISOString(),
-        };
-
-        // Intent signature serves as auth (no separate header needed)
-        const response = await this._fetchApi(`${this._apiBaseUrl}/api/quotes`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(quoteData),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `Failed to submit quote: ${response.status}`);
-        }
-
-        const result = await response.json();
-
-        return {
-            quoteId: result.quote.id,
-            quote: {
-                id: result.quote.id,
-                poolId: result.quote.poolId,
-                syndicateAddress: result.quote.syndicateAddress,
-                syndicateName: result.quote.syndicateName,
-                coverageAmount: result.quote.coverageAmount,
-                premiumRateBps: result.quote.premiumRateBps,
-                minDurationWeeks: result.quote.minDurationWeeks,
-                maxDurationWeeks: result.quote.maxDurationWeeks,
-                expiresAt: result.quote.expiresAt,
-                status: result.quote.status,
-            },
-            reserveIntent,
-            coverageIntent,
-            reserveSignature,
-            intentSignature,
-        };
-    }
-
-    /**
-     * Cancel an existing quote
-     * @param quoteId The quote ID to cancel
-     * @param syndicateAddress The syndicate address that owns the quote (required for auth)
-     */
-    async cancelQuote(quoteId: string, syndicateAddress?: string): Promise<boolean> {
-        const headers: Record<string, string> = {};
-        if (this.signer && syndicateAddress) {
-            headers['Authorization'] = await this._createAuthHeader('cancel_quote', syndicateAddress);
-        }
-        const response = await this._fetchApi(`${this._apiBaseUrl}/api/quotes?quoteId=${encodeURIComponent(quoteId)}`, {
-            method: 'DELETE',
-            headers,
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `Failed to cancel quote: ${response.status}`);
-        }
-
-        return true;
-    }
+    private static readonly PURCHASE_EXTENSION_SYSTEM_ID =
+        '0xe9552cedfafd72645d3dcd42e34bff1d2c48fcca512f96af4475ae7a72581574';
 
     /**
      * Get quotes for a specific syndicate
@@ -2094,27 +2401,41 @@ export class LayerCoverSDK {
      * @param includeClosed Whether to include cancelled/filled quotes
      */
     async getSyndicateQuotes(syndicateAddress: string, includeClosed = false): Promise<FixedRateQuote[]> {
-        const url = `${this._apiBaseUrl}/api/quotes?syndicateAddress=${encodeURIComponent(syndicateAddress)}&includeClosed=${includeClosed}`;
+        const normalizedSyndicateAddress = syndicateAddress.toLowerCase();
 
+        try {
+            const pools = await this.listPools({ includeDeprecated: true });
+            const poolIds = [...new Set(pools.map((pool) => pool.poolId))];
+            const quotesByPool = await this._fetchQuotesBatch(poolIds);
+
+            if (includeClosed) {
+                this._log.warn(
+                    '[LayerCover SDK] includeClosed=true requested, but /api/quotes/batch only returns active orderbook quotes.'
+                );
+            }
+
+            const quotes = Object.values(quotesByPool)
+                .flat()
+                .filter((quote) => quote.syndicateAddress.toLowerCase() === normalizedSyndicateAddress)
+                .filter((quote) => includeClosed || (!LayerCoverSDK.isQuoteExpired(quote) && quote.status === 'active'));
+
+            return LayerCoverSDK.sortQuotesByRate(quotes);
+        } catch (error: any) {
+            const message = String(error?.message || '');
+            if (!message.includes('404')) {
+                throw error;
+            }
+        }
+
+        // Backward compatibility for environments that still serve the old syndicate route.
+        const url = `${this._apiBaseUrl}/api/quotes?syndicateAddress=${encodeURIComponent(syndicateAddress)}&includeClosed=${includeClosed}`;
         const response = await this._fetchApi(url);
         if (!response.ok) {
             throw new Error(`Failed to fetch syndicate quotes: ${response.status}`);
         }
 
         const data = await response.json();
-        return (data.quotes || []).map((q: any) => ({
-            id: q.id,
-            poolId: q.poolId,
-            syndicateAddress: q.syndicateAddress,
-            syndicateName: q.syndicateName || 'Unknown',
-            coverageAmount: q.coverageAmount?.toString() || q.reserveIntent?.coverageAmount || '0',
-            premiumRateBps: Number(q.premiumRateBps),
-            minDurationWeeks: Number(q.minDurationWeeks),
-            maxDurationWeeks: Number(q.maxDurationWeeks),
-            expiresAt: q.expiresAt,
-            status: q.status || 'active',
-            orderId: q.orderId,
-        }));
+        return this._normalizeFixedRateQuotes(data.quotes || []);
     }
 
     /**
@@ -2125,6 +2446,20 @@ export class LayerCoverSDK {
         totalExposure: string;
         activeQuoteCount: number;
     }> {
+        try {
+            const quotes = await this.getSyndicateQuotes(syndicateAddress);
+            const totalExposure = quotes.reduce((sum, quote) => sum + BigInt(quote.coverageAmount || '0'), 0n);
+            return {
+                totalExposure: totalExposure.toString(),
+                activeQuoteCount: quotes.length,
+            };
+        } catch (error: any) {
+            const message = String(error?.message || '');
+            if (!message.includes('404')) {
+                throw error;
+            }
+        }
+
         const response = await this._fetchApi(
             `${this._apiBaseUrl}/api/quotes/exposure?syndicateAddress=${encodeURIComponent(syndicateAddress)}`
         );
@@ -2214,15 +2549,13 @@ export class LayerCoverSDK {
      */
     async prepareApprovalTx(poolId: number, amount: bigint) {
         const tokenAddress = await this.getPaymentToken(poolId);
-        const orderBookAddress = this.intentOrderBook
-            ? await this.intentOrderBook.getAddress()
-            : await this.policyManager.getAddress();
+        const spenderAddress = await this._resolvePurchaseGatewayAddress();
 
         const token = new Contract(tokenAddress, [
             'function approve(address spender, uint256 amount) external returns (bool)'
         ], this.signer || this.provider);
 
-        return await token.approve.populateTransaction(orderBookAddress, amount);
+        return await token.approve.populateTransaction(spenderAddress, amount);
     }
 
     // ========================================================================
@@ -2390,85 +2723,6 @@ export class LayerCoverSDK {
             }
             throw error;
         }
-    }
-
-    // ========================================================================
-    // DEPRECATED METHODS
-    // ========================================================================
-
-    /**
-     * @deprecated Use getFixedRateQuotes() for the current fixed-rate model.
-     * This method is no longer supported as the protocol has transitioned to
-     * 100% fixed-rate coverage.
-     */
-    async getQuote(poolId: number, coverAmount: bigint, periodDays: number, maxRateBps?: number): Promise<Quote> {
-        console.warn(
-            'DEPRECATION WARNING: getQuote() is deprecated. ' +
-            'The protocol now uses fixed-rate quotes via getFixedRateQuotes(). ' +
-            'See https://docs.layercover.com/sdk-migration for migration guide.'
-        );
-
-        // Attempt to use fixed-rate quotes instead
-        const quotes = await this.getFixedRateQuotes(poolId);
-
-        if (quotes.length === 0) {
-            throw new NoQuotesAvailableError(
-                'No quotes available. The protocol now uses fixed-rate quotes. ' +
-                'Use getFixedRateQuotes() instead.'
-            );
-        }
-
-        const bestQuote = quotes[0];
-        const durationSeconds = periodDays * 86400;
-        const premium = this.calculatePremium(coverAmount, bestQuote.premiumRateBps, durationSeconds);
-
-        if (maxRateBps && bestQuote.premiumRateBps > maxRateBps) {
-            throw new RateTooHighError(
-                `Rate ${bestQuote.premiumRateBps} bps exceeds max ${maxRateBps} bps`,
-                bestQuote.premiumRateBps,
-                maxRateBps
-            );
-        }
-
-        return {
-            poolId,
-            amount: coverAmount,
-            period: durationSeconds,
-            rateBps: bestQuote.premiumRateBps,
-            premium,
-            minDeposit: premium,
-            capacity: BigInt(bestQuote.coverageAmount),
-        };
-    }
-
-    /**
-     * @deprecated Use prepareBuyFromQuoteTx() or purchase() for the fixed-rate model.
-     */
-    async preparePurchaseTx(poolId: number, coverAmount: bigint, maxPremium: bigint, referralCode?: string, durationSeconds?: number) {
-        console.warn(
-            'DEPRECATION WARNING: preparePurchaseTx() is deprecated. ' +
-            'Use prepareBuyFromQuoteTx() or purchase() for the fixed-rate model.'
-        );
-
-        // Get best quote and prepare transaction
-        const quotes = await this.getFixedRateQuotes(poolId);
-
-        if (quotes.length === 0) {
-            throw new NoQuotesAvailableError('No quotes available for this pool');
-        }
-
-        const bestQuote = quotes[0];
-
-        if (bestQuote.orderId !== undefined && bestQuote.orderId !== null) {
-            // Use buyFromQuote path
-            // Use provided duration or fallback to max duration (legacy behavior)
-            const duration = durationSeconds || bestQuote.maxDurationWeeks * 7 * 24 * 60 * 60;
-            return await this.prepareBuyFromQuoteTx(bestQuote.orderId, coverAmount, duration);
-        }
-
-        throw new Error(
-            'No on-chain orders available. Use the purchase() method for intent-based purchases.'
-        );
     }
 
     // ========================================================================
@@ -2684,14 +2938,14 @@ export class LayerCoverSDK {
         }
     }
 
-    private _createChainMismatchError(connectedChainId: number): Error {
+    private _createChainMismatchError(connectedChainId: number): ChainMismatchError {
         const deploymentSuffix = this._deployment ? ` (deployment ${this._deployment})` : '';
-        const error = new Error(
-            `Chain mismatch: SDK configured for ${this._chainId}${deploymentSuffix}, signer connected to ${connectedChainId}`
-        ) as Error & { expectedChainId?: number; expectedDeployment?: string };
-        error.expectedChainId = this._chainId;
-        error.expectedDeployment = this._deployment;
-        return error;
+        return new ChainMismatchError(
+            `Chain mismatch: SDK configured for ${this._chainId}${deploymentSuffix}, signer connected to ${connectedChainId}`,
+            this._chainId,
+            connectedChainId,
+            this._deployment
+        );
     }
 
     private async _ensureContracts() {
@@ -2954,7 +3208,7 @@ export class LayerCoverSDK {
                     'function ownerOf(uint256 tokenId) view returns (address)',
                     'function totalSupply() view returns (uint256)',
                     // Policy data
-                    'function getPolicy(uint256 id) view returns (tuple(uint256 coverage, uint256 poolId, uint64 start, uint64 activation, uint64 claimableFrom, uint64 startBlock, bool voided, uint128 premiumDeposit, uint128 lastDrainTime, tuple(address underwriter, uint16 fixedRateBps, uint16 cancellationPenaltyBps, uint64 endTime, bytes32 reservationKey, uint256 reinsuredPortion) intent, tuple(address vault, uint256 sharesInsured, uint256 insuredValueUSDC, uint256 pricePerShareSnapshot) vaultCover))',
+                    'function getPolicy(uint256 id) view returns (tuple(uint256 coverage, uint256 poolId, uint64 start, uint64 activation, uint64 claimableFrom, uint64 startBlock, bool voided, uint128 premiumDeposit, uint128 lastDrainTime, tuple(address underwriter, uint16 fixedRateBps, uint64 endTime, bytes32 reservationKey, uint256 reinsuredPortion) intent, tuple(address vault, uint256 sharesInsured, uint256 insuredValueUSDC, uint256 pricePerShareSnapshot) vaultCover))',
                 ],
                 this.signer || this.provider
             );
@@ -2988,7 +3242,7 @@ export class LayerCoverSDK {
             fixedRateBps: Number(raw.intent.fixedRateBps),
             endTimestamp: endTime,
             underwriter: raw.intent.underwriter,
-            cancellationPenaltyBps: Number(raw.intent.cancellationPenaltyBps),
+            cancellationPenaltyBps: Number(raw.intent.cancellationPenaltyBps ?? 0),
             isActive: active,
             status,
         };

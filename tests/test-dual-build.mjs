@@ -64,9 +64,13 @@ try {
     assert(typeof sdk.CONTRACT_ADDRESSES === 'object', 'CJS: CONTRACT_ADDRESSES exports');
     assert(typeof sdk.POOL_CONFIG === 'object', 'CJS: POOL_CONFIG exports');
     assert(typeof sdk.TOKEN_LOGOS === 'object', 'CJS: TOKEN_LOGOS exports');
-    assert(sdk.DEFAULT_CHAIN_ID === 84532, 'CJS: DEFAULT_CHAIN_ID = 84532');
+    assert(sdk.DEFAULT_CHAIN_ID === 11155111, 'CJS: DEFAULT_CHAIN_ID = 11155111');
     assert(typeof sdk.RateTooHighError === 'function', 'CJS: RateTooHighError class exports');
     assert(typeof sdk.NoQuotesAvailableError === 'function', 'CJS: NoQuotesAvailableError class exports');
+    assert(typeof sdk.PurchaseBlockedError === 'function', 'CJS: PurchaseBlockedError class exports');
+    assert(typeof sdk.QuoteStaleError === 'function', 'CJS: QuoteStaleError class exports');
+    assert(typeof sdk.SignerRequiredError === 'function', 'CJS: SignerRequiredError class exports');
+    assert(typeof sdk.ChainMismatchError === 'function', 'CJS: ChainMismatchError class exports');
 } catch (err) {
     console.error(`  ❌ CJS require() failed: ${err.message}`);
     failed++;
@@ -87,7 +91,10 @@ try {
     assert(esmContent.includes('export'), 'ESM: File contains export statements');
     assert(esmContent.includes('LayerCoverSDK'), 'ESM: File contains LayerCoverSDK class');
     assert(esmContent.includes('getHumanError'), 'ESM: File contains getHumanError export');
-    assert(esmContent.includes('ERROR_MESSAGES'), 'ESM: File contains ERROR_MESSAGES export');
+    assert(
+        esmContent.includes('ERROR_MESSAGES') || esmContent.includes("export * from './errors'"),
+        'ESM: File re-exports errors module'
+    );
     assert(esmContent.includes('CONTRACT_ADDRESSES'), 'ESM: File contains CONTRACT_ADDRESSES export');
     assert(esmContent.includes('viem-adapter') || esmContent.includes('ViemAdapter'), 'ESM: File re-exports viem-adapter module');
     assert(!esmContent.includes('require('), 'ESM: File does not contain CJS require()');

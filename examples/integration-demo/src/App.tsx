@@ -159,7 +159,7 @@ export default function App() {
         addLog(`Purchasing ${coverAmount} USDC coverage for ${weeks} weeks @ ${(selectedQuote.premiumRateBps / 100).toFixed(1)}%…`, 'info');
 
         try {
-            const result = await sdk.purchase(selectedPool.poolId, amountRaw, weeks);
+            const result = await sdk.purchaseQuote(selectedQuote, amountRaw, weeks);
             addLog(`✅ Policy purchased! TX: ${shortAddr(result.txHash)}${result.policyId ? ` — Policy #${result.policyId}` : ''}`, 'success');
             setStep('policies');
         } catch (err: any) {

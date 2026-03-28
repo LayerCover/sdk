@@ -14,7 +14,7 @@ npm install @layercover/sdk ethers
 npm install @mui/material @mui/icons-material @emotion/react @emotion/styled react
 ```
 
-**Using viem/wagmi** instead of ethers? No extra install needed — the adapter is built in.
+**Using viem/wagmi** instead of ethers? No extra install is needed because the adapter is built in.
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ npm install @mui/material @mui/icons-material @emotion/react @emotion/styled rea
 ```tsx
 import { CoverButton } from '@layercover/sdk/react';
 
-<CoverButton signer={signer} poolId={1} deployment="avalanche_fuji_usdc" />
+<CoverButton signer={signer} poolId={1} deployment="ethereum_sepolia_usdc" />
 ```
 
 ### Headless SDK
@@ -33,15 +33,25 @@ import { LayerCoverSDK } from '@layercover/sdk';
 
 // Auto-configure from API for a specific deployment (recommended)
 const sdk = await LayerCoverSDK.create(signer, {
-  deployment: 'avalanche_fuji_usdc',
+  deployment: 'ethereum_sepolia_usdc',
 });
 
 // Browse pools
 const pools = await sdk.listPools();
 
-// Get quotes & purchase
-const quotes = await sdk.getActiveQuotes(pools[0].poolId);
-const result = await sdk.purchase(pools[0].poolId, coverAmount, durationWeeks);
+// Preflight the best executable quote
+const amount = 25_000000n;
+const preparation = await sdk.preparePurchase(pools[0].poolId, amount, 4);
+
+if (preparation.blockers.length > 0) {
+  throw new Error(preparation.blockers.map((blocker) => blocker.message).join(' '));
+}
+
+// Send approval only when needed, then send purchase
+if (preparation.approvalTx) {
+  await signer.sendTransaction(preparation.approvalTx);
+}
+await signer.sendTransaction(preparation.purchaseTx!);
 ```
 
 ### Viem / Wagmi
@@ -51,7 +61,7 @@ import { LayerCoverSDK, ViemAdapter } from '@layercover/sdk';
 
 const signer = ViemAdapter.fromWalletClient(walletClient);
 const sdk = await LayerCoverSDK.create(signer, {
-  deployment: 'avalanche_fuji_usdc',
+  deployment: 'ethereum_sepolia_usdc',
 });
 ```
 
@@ -75,8 +85,8 @@ const sdk = await LayerCoverSDK.create(signer, {
 | `sdk.getActiveQuotes(poolId)` | Only active (non-expired) quotes, sorted by rate |
 | `sdk.isQuoteExpired(quote)` | Check if a quote has expired |
 | `sdk.sortQuotesByRate(quotes)` | Sort quotes by premium rate (cheapest first) |
-| `sdk.refreshQuote(quoteId, amount, durationSecs)` | Get a fresh reservation (valid ~10 minutes) |
 | `sdk.getBestRate(poolId)` | Best (lowest) **active** rate available in basis points |
+| `sdk.getBestExecutableQuote(poolId, amount, weeks, maxRateBps?)` | Cheapest active quote that can actually fill the requested purchase |
 | `sdk.watchQuotes(poolId, callback, options?)` | Live quote stream with auto-refresh. Returns unsubscribe function |
 
 ### Premium Calculation
@@ -93,11 +103,43 @@ const premium = sdk.calculatePremium(
 
 | Method | Description |
 |--------|-------------|
-| `sdk.purchase(poolId, amount, weeks, maxRateBps?, referralCode?)` | **Simplified** — auto-picks the best quote and path |
-| `sdk.purchaseWithIntent(quote, amount, durationSecs, referralCode?)` | Intent-based purchase using `executeMatchedIntent` |
-| `sdk.prepareApprovalTx(poolId, amount)` | Prepare an ERC-20 approval for premium |
+| `sdk.preparePurchase(poolId, amount, weeks, maxRateBps?, referralCode?)` | Returns the executable quote, blockers, and prepared approval/purchase txs |
+| `sdk.preparePurchaseFromQuote(quote, amount, weeks, maxRateBps?, referralCode?)` | Preflight a specific selected quote without auto-switching to another quote |
+| `sdk.refreshSelectedQuote(quote)` | Refresh a pinned quote against the latest active pool quotes |
+| `sdk.revalidateQuoteForPurchase(quote, { maxAgeMs? })` | Revalidate a cached quote before execution if it may be stale |
+| `sdk.purchase(poolId, amount, weeks, maxRateBps?, referralCode?)` | Buy coverage from the best executable QuoteBook quote |
+| `sdk.purchaseQuote(quote, amount, weeks, maxRateBps?, referralCode?)` | Execute a specific selected QuoteBook quote |
+| `sdk.prepareBuyFromQuoteTx(orderId, amount, durationSecs, referralCode?)` | Prepare a direct `PurchaseGateway.buy(...)` transaction |
+| `sdk.prepareApprovalTx(poolId, amount)` | Prepare an ERC-20 approval for the `PurchaseGateway` |
 
-`prepareBuyFromQuoteTx(...)` is deprecated on current deployments and will throw.
+Recommended buyer flow:
+
+```ts
+const preparation = await sdk.preparePurchase(poolId, coverAmount, 4);
+
+if (preparation.blockers.length > 0) {
+  console.error(preparation.blockers);
+  return;
+}
+
+if (preparation.approvalTx) {
+  await signer.sendTransaction(preparation.approvalTx);
+}
+
+await signer.sendTransaction(preparation.purchaseTx!);
+```
+
+If your UI lets the user pick an individual quote, pin execution to that quote:
+
+```ts
+const pinned = await sdk.preparePurchaseFromQuote(selectedQuote, coverAmount, 4);
+if (pinned.status === 'approval_required' && pinned.approvalTx) {
+  await signer.sendTransaction(pinned.approvalTx);
+}
+if (pinned.status === 'ready' || pinned.status === 'approval_required') {
+  await signer.sendTransaction(pinned.purchaseTx);
+}
+```
 
 ### Policy Management
 
@@ -127,38 +169,14 @@ await signer.sendTransaction(lapseTx);
 | `sdk.prepareCancelCoverTx(policyId)` | Prepare a cancellation transaction |
 | `sdk.prepareLapsePolicyTx(policyId)` | Prepare a lapse transaction for an expired policy |
 
-## For Underwriters (Programmatic Quoting)
-
-Syndicates can submit, manage, and cancel coverage quotes on the orderbook — no UI required:
-
-```ts
-// Submit a quote (handles EIP-712 signing automatically)
-const result = await sdk.submitQuote({
-  poolId: 1,
-  syndicateAddress: '0xYourSyndicate...',
-  coverageAmount: ethers.parseUnits('10000', 6),
-  premiumRateBps: 500,   // 5% annual
-  minDurationWeeks: 4,
-  maxDurationWeeks: 12,
-});
-console.log('Quote live:', result.quoteId);
-
-// Monitor exposure
-const exposure = await sdk.getSyndicateExposure('0xYourSyndicate...');
-
-// List & cancel quotes
-const quotes = await sdk.getSyndicateQuotes('0xYourSyndicate...');
-await sdk.cancelQuote(result.quoteId);
-```
+## For Underwriters
 
 | Method | Description |
 |--------|-------------|
-| `sdk.submitQuote(params)` | Submit a signed quote to the orderbook |
 | `sdk.getSyndicateQuotes(address, includeClosed?)` | List quotes for a syndicate |
 | `sdk.getSyndicateExposure(address)` | Total quoted exposure and active quote count |
-| `sdk.cancelQuote(quoteId)` | Cancel an active quote |
 
-See [`examples/submit-quote.js`](examples/submit-quote.js) for a runnable script.
+Quote creation and cancellation are now on-chain QuoteBook responsibilities and are not exposed through this SDK.
 
 ## Error Handling
 
@@ -189,8 +207,15 @@ console.log(ERROR_MESSAGES[selector]);
 
 Custom error classes are available for specific scenarios:
 
-- `RateTooHighError` — thrown when no quote meets the `maxRateBps` constraint
-- `NoQuotesAvailableError` — thrown when a pool has no active quotes
+- `RateTooHighError`: thrown when no quote meets the `maxRateBps` constraint
+- `NoQuotesAvailableError`: thrown when a pool has no active quotes
+- `PurchaseBlockedError`: thrown when quotes exist but none can fill the requested amount or duration
+- `QuoteStaleError`: thrown when a selected quote is stale and no longer matches live liquidity
+- `SignerRequiredError` / `ChainMismatchError`: thrown when execution prerequisites are missing
+
+For observability, pass `onEvent` in SDK config to receive structured lifecycle events such as
+`quotes_fetched`, `quote_revalidated`, `purchase_prepared`, `approval_submitted`,
+`purchase_submitted`, `purchase_confirmed`, and `purchase_sync_succeeded`.
 
 ## React Hooks & Components
 
@@ -198,9 +223,9 @@ Custom error classes are available for specific scenarios:
 import { useLayerCover, BuyCoverModal, CoverButton } from '@layercover/sdk/react';
 ```
 
-- **`<CoverButton>`** — Drop-in button that opens a purchase modal
-- **`<BuyCoverModal>`** — Standalone modal with pool picker, quotes, and purchase flow
-- **`useLayerCover()`** — Hook with live quotes, pool discovery, and purchase
+- **`<CoverButton>`**: Drop-in button that opens a purchase modal
+- **`<BuyCoverModal>`**: Standalone modal with pool picker, quotes, and purchase flow
+- **`useLayerCover()`**: Hook with live quotes, pool discovery, and `preparePurchase()` preflight support
 
 For multi-chain integrations, pass `deployment` explicitly to React helpers so the SDK resolves the correct network and contract set.
 
@@ -211,13 +236,14 @@ The SDK auto-discovers contract addresses via the `/api/config` endpoint. You ca
 ```ts
 const sdk = await LayerCoverSDK.create(signer, {
   apiBaseUrl: 'https://your-deployment.com',  // Default: https://app.layercover.com
-  chainId: 84532,                              // Default: Base Sepolia (84532)
-  deployment: 'base_sepolia_usdc',             // Default: auto-detected
+  chainId: 11155111,                           // Ethereum Sepolia
+  deployment: 'ethereum_sepolia_usdc',         // Recommended explicit deployment
   requestTimeoutMs: 15_000,                    // Default: 15000
   maxRetries: 2,                               // Default: 2 (idempotent API calls)
   retryDelayMs: 300,                           // Default: 300 (exponential backoff base)
   txConfirmations: 1,                          // Default: 1
   txWaitTimeoutMs: 180_000,                    // Default: 180000
+  onEvent: (event) => console.log(event.type, event.data),
 });
 ```
 
@@ -225,7 +251,7 @@ Or construct manually with known addresses:
 
 ```ts
 const sdk = new LayerCoverSDK(signer, policyManagerAddress, {
-  intentOrderBookAddress: '0x...',
+  purchaseGatewayAddress: '0x...',
   apiBaseUrl: 'http://localhost:3001',
   requestTimeoutMs: 20_000,
   maxRetries: 1,
@@ -234,7 +260,7 @@ const sdk = new LayerCoverSDK(signer, policyManagerAddress, {
 ```
 
 Referral code note:
-`purchase(...)` and `purchaseWithIntent(...)` expect `referralCode` as bytes32 hex (`0x` + 64 hex chars).
+`purchase(...)` and `prepareBuyFromQuoteTx(...)` expect `referralCode` as bytes32 hex (`0x` + 64 hex chars).
 
 ## Testnet Smoke Test
 
@@ -250,6 +276,7 @@ PRIVATE_KEY=0x... yarn smoke:testnet:execute
 
 Script:
 - `examples/smoke-testnet.js`
+- `tests/e2e/local-purchase-flow.mjs`
 
 Common options:
 
@@ -257,6 +284,14 @@ Common options:
 node examples/smoke-testnet.js --dry-run --pool-id=1 --amount-usdc=25 --weeks=4
 node examples/smoke-testnet.js --execute --pool-id=1 --amount-usdc=25 --weeks=4 --max-rate-bps=700
 ```
+
+Controlled local end-to-end harness:
+
+```bash
+npm run test:e2e:local
+```
+
+This runs the purchase flow inside Hardhat's in-process network, stubs `/api/config`, `/api/pools/list`, `/api/quotes/batch`, and `/api/purchase/sync` in memory, seeds a real QuoteBook quote, executes a real SDK purchase, and verifies the minted policy plus sync callback.
 
 ## Documentation
 

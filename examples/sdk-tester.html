@@ -376,7 +376,7 @@
                         </div>
                         <div class="form-group">
                             <label>Deployment</label>
-                            <input type="text" id="deployment" value="base_sepolia_usdc" placeholder="base_sepolia_usdc">
+                            <input type="text" id="deployment" value="ethereum_sepolia_usdc" placeholder="ethereum_sepolia_usdc">
                         </div>
                     </div>
                     <button class="btn btn-primary" onclick="fetchConfig()">🔍 Fetch Config</button>
@@ -401,7 +401,7 @@
                         </div>
                         <div class="form-group">
                             <label>Deployment</label>
-                            <input type="text" id="quoteDeployment" value="base_sepolia_usdc">
+                            <input type="text" id="quoteDeployment" value="ethereum_sepolia_usdc">
                         </div>
                     </div>
                     <div class="btn-row">
@@ -452,7 +452,7 @@
                 <div class="card-header" onclick="toggleCard('submitCard')">
                     <div class="card-title">
                         <div class="icon">📤</div>
-                        Submit Quote (Underwriter)
+                        Legacy Quote Submission
                     </div>
                     <span class="card-badge badge-wallet">Wallet Req.</span>
                 </div>
@@ -487,7 +487,7 @@
                             <input type="number" id="submitMaxWeeks" value="12" min="1">
                         </div>
                     </div>
-                    <button class="btn btn-primary" id="submitQuoteBtn" onclick="submitQuote()" disabled>📝 Sign & Submit Quote</button>
+                    <button class="btn btn-primary" id="submitQuoteBtn" onclick="showQuoteSubmissionRemoved()" disabled>📝 Removed</button>
                     <div id="submitResult"></div>
                 </div>
             </div>
@@ -547,7 +547,7 @@
                         </div>
                     </div>
                     <div class="btn-row">
-                        <button class="btn btn-outline" id="prepareTxBtn" onclick="preparePurchaseTx()" disabled>🔧 Prepare Tx</button>
+                        <button class="btn btn-outline" id="prepareTxBtn" onclick="prepareDirectPurchase()" disabled>🔧 Prepare Tx</button>
                         <button class="btn btn-success" id="executePurchaseBtn" onclick="executePurchase()" disabled>🔐 Execute Purchase</button>
                     </div>
                     <div id="purchaseResult"></div>
@@ -797,193 +797,10 @@
         // ═══════════════════════════════════════════════════════════════════
         // 4. QUOTE SUBMISSION (SYNDICATE)
         // ═══════════════════════════════════════════════════════════════════
-        async function submitQuote() {
-            if (!signer) { log('Connect wallet first', 'error'); return; }
-
-            const base = getApiBase();
-            const poolId = parseInt(document.getElementById('submitPoolId').value);
-            const syndicateAddress = document.getElementById('submitSyndicateAddr').value;
-            const coverageUsdc = parseFloat(document.getElementById('submitCoverage').value);
-            const premiumRateBps = parseInt(document.getElementById('submitRate').value);
-            const minWeeks = parseInt(document.getElementById('submitMinWeeks').value);
-            const maxWeeks = parseInt(document.getElementById('submitMaxWeeks').value);
-
-            if (!syndicateAddress) { log('Syndicate address required', 'error'); return; }
-
-            log('Preparing quote signatures...');
-
-            try {
-                const DECIMALS = 6;
-                const coverageAmount = BigInt(Math.floor(coverageUsdc * 10 ** DECIMALS));
-                const minCoverageDuration = minWeeks * 7 * 24 * 60 * 60;
-                const maxCoverageDuration = maxWeeks * 7 * 24 * 60 * 60;
-                const reservationExpiry = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
-                const nonce = Date.now();
-                const salt = ethers.hexlify(ethers.randomBytes(32));
-                const network = await provider.getNetwork();
-                const chainId = Number(network.chainId);
-
-                // ReserveIntent
-                const reserveIntent = {
-                    solver: walletAddress,
-                    underwriter: syndicateAddress,
-                    poolId,
-                    minCoverageDuration,
-                    maxCoverageDuration,
-                    coverageAmount: coverageAmount.toString(),
-                    minFillAmount: coverageAmount.toString(),
-                    allowPartialFill: false,
-                    reservationExpiry,
-                    nonce: nonce.toString(),
-                    whitelistedBuyer: ethers.ZeroAddress,
-                    minPremiumBps: premiumRateBps,
-                    cancellationPenaltyBps: 0,
-                };
-
-                const reserveDomain = { name: 'Syndicate', version: '1', chainId, verifyingContract: syndicateAddress };
-                const reserveTypes = {
-                    ReserveIntent: [
-                        { name: 'solver', type: 'address' },
-                        { name: 'underwriter', type: 'address' },
-                        { name: 'poolId', type: 'uint256' },
-                        { name: 'minCoverageDuration', type: 'uint32' },
-                        { name: 'maxCoverageDuration', type: 'uint32' },
-                        { name: 'coverageAmount', type: 'uint256' },
-                        { name: 'minFillAmount', type: 'uint256' },
-                        { name: 'allowPartialFill', type: 'bool' },
-                        { name: 'reservationExpiry', type: 'uint64' },
-                        { name: 'nonce', type: 'uint96' },
-                        { name: 'whitelistedBuyer', type: 'address' },
-                        { name: 'minPremiumBps', type: 'uint16' },
-                        { name: 'cancellationPenaltyBps', type: 'uint16' },
-                    ],
-                };
-
-                const reserveValue = {
-                    solver: reserveIntent.solver,
-                    underwriter: reserveIntent.underwriter,
-                    poolId: reserveIntent.poolId,
-                    minCoverageDuration: reserveIntent.minCoverageDuration,
-                    maxCoverageDuration: reserveIntent.maxCoverageDuration,
-                    coverageAmount: BigInt(reserveIntent.coverageAmount),
-                    minFillAmount: BigInt(reserveIntent.minFillAmount),
-                    allowPartialFill: reserveIntent.allowPartialFill,
-                    reservationExpiry: reserveIntent.reservationExpiry,
-                    nonce: BigInt(reserveIntent.nonce),
-                    whitelistedBuyer: reserveIntent.whitelistedBuyer,
-                    minPremiumBps: reserveIntent.minPremiumBps,
-                    cancellationPenaltyBps: reserveIntent.cancellationPenaltyBps,
-                };
-
-                log('Requesting ReserveIntent signature...');
-                const reserveSignature = await signer.signTypedData(reserveDomain, reserveTypes, reserveValue);
-                log('ReserveIntent signed ✓', 'success');
-
-                // CoverageIntent
-                const coverageIntent = {
-                    maker: syndicateAddress,
-                    poolId,
-                    coverageAmount: coverageAmount.toString(),
-                    premiumRateBps,
-                    minDuration: minCoverageDuration,
-                    maxDuration: maxCoverageDuration,
-                    nonce: nonce.toString(),
-                    expiry: reservationExpiry,
-                    salt,
-                    requiresUpfront: true,
-                    cancellationPenaltyBps: 0,
-                    minFillAmount: coverageAmount.toString(),
-                    whitelistedBuyer: ethers.ZeroAddress,
-                };
-
-                // Resolve IntentMatcher address
-                let intentMatcher = configData?.contracts?.intentMatcher;
-                if (!intentMatcher) {
-                    log('No IntentMatcher address in config, using fallback', 'warning');
-                    intentMatcher = configData?.contracts?.intentOrderBook || ethers.ZeroAddress;
-                }
-
-                const intentDomain = { name: 'IntentMatcher', version: '1', chainId, verifyingContract: intentMatcher };
-                const intentTypes = {
-                    CoverageIntent: [
-                        { name: 'maker', type: 'address' },
-                        { name: 'poolId', type: 'uint256' },
-                        { name: 'coverageAmount', type: 'uint256' },
-                        { name: 'premiumRateBps', type: 'uint256' },
-                        { name: 'minDuration', type: 'uint256' },
-                        { name: 'maxDuration', type: 'uint256' },
-                        { name: 'nonce', type: 'uint256' },
-                        { name: 'expiry', type: 'uint256' },
-                        { name: 'salt', type: 'uint256' },
-                        { name: 'requiresUpfront', type: 'bool' },
-                        { name: 'cancellationPenaltyBps', type: 'uint16' },
-                        { name: 'minFillAmount', type: 'uint256' },
-                        { name: 'whitelistedBuyer', type: 'address' },
-                    ],
-                };
-
-                const intentValue = {
-                    maker: coverageIntent.maker,
-                    poolId: coverageIntent.poolId,
-                    coverageAmount: BigInt(coverageIntent.coverageAmount),
-                    premiumRateBps: coverageIntent.premiumRateBps,
-                    minDuration: coverageIntent.minDuration,
-                    maxDuration: coverageIntent.maxDuration,
-                    nonce: BigInt(coverageIntent.nonce),
-                    expiry: coverageIntent.expiry,
-                    salt: BigInt(coverageIntent.salt),
-                    requiresUpfront: coverageIntent.requiresUpfront,
-                    cancellationPenaltyBps: coverageIntent.cancellationPenaltyBps,
-                    minFillAmount: BigInt(coverageIntent.minFillAmount),
-                    whitelistedBuyer: coverageIntent.whitelistedBuyer,
-                };
-
-                log('Requesting CoverageIntent signature...');
-                const intentSignature = await signer.signTypedData(intentDomain, intentTypes, intentValue);
-                log('CoverageIntent signed ✓', 'success');
-
-                // Submit to API
-                log('Submitting quote to API...');
-                const quoteData = {
-                    poolId,
-                    deployment: document.getElementById('deployment').value,
-                    syndicateAddress,
-                    syndicateName: 'SDK Tester',
-                    coverageAmount: coverageAmount.toString(),
-                    premiumRateBps,
-                    minDurationWeeks: minWeeks,
-                    maxDurationWeeks: maxWeeks,
-                    reserveIntent,
-                    signature: reserveSignature,
-                    coverageIntent,
-                    intentSignature,
-                    createdAt: new Date().toISOString(),
-                };
-
-                const res = await fetch(`${base}/api/quotes`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(quoteData),
-                });
-
-                const result = await res.json();
-
-                if (result.success || result.quote) {
-                    document.getElementById('submitResult').innerHTML = resultPanel([
-                        ['Status', '✅ Submitted', 'success'],
-                        ['Quote ID', result.quote?.id || '—'],
-                        ['Pool', poolId],
-                        ['Rate', `${(premiumRateBps / 100).toFixed(2)}%`],
-                    ]) + jsonPanel(result);
-                    log(`Quote submitted: ${result.quote?.id}`, 'success');
-                } else {
-                    throw new Error(result.error || 'Submission failed');
-                }
-            } catch (err) {
-                document.getElementById('submitResult').innerHTML =
-                    `<div class="status-msg error show">❌ ${err.message}</div>`;
-                log(`Quote submission failed: ${err.message}`, 'error');
-            }
+        function showQuoteSubmissionRemoved() {
+            document.getElementById('submitResult').innerHTML =
+                `<div class="status-msg warning show">Legacy quote submission has been removed from the SDK tester.</div>`;
+            log('Legacy quote submission has been removed from this tester.', 'warning');
         }
 
         // ═══════════════════════════════════════════════════════════════════
@@ -1045,7 +862,7 @@
         // ═══════════════════════════════════════════════════════════════════
         // 6. PURCHASE FLOW
         // ═══════════════════════════════════════════════════════════════════
-        async function preparePurchaseTx() {
+        async function prepareDirectPurchase() {
             if (!signer) { log('Connect wallet first', 'error'); return; }
 
             const base = getApiBase();

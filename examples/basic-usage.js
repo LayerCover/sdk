@@ -8,31 +8,28 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 async function main() {
     console.log("=== LayerCover SDK - Fixed-Rate Coverage Example ===\n");
 
-    // 1. Setup provider (Base Sepolia)
-    const rpcUrl = 'https://sepolia.base.org';
+    // 1. Setup provider (Ethereum Sepolia)
+    const rpcUrl = 'https://eth-sepolia.g.alchemy.com/v2/demo';
     const provider = new ethers.JsonRpcProvider(rpcUrl);
 
     // 2. Setup Signer if key provided
     let sdk;
     let signer;
 
-    // Address from packages/contracts/deployments/base_sepolia/instances/usdc.json
-    const policyManagerAddr = '0x33807f8c7b35E7233e33aFCDB6b3fea0C535c015';
-
     // Configure SDK with API endpoint
     const sdkOptions = {
         apiBaseUrl: 'https://app.layercover.com',
-        deployment: 'base_sepolia_usdc',
-        chainId: 84532,
+        deployment: 'ethereum_sepolia_usdc',
+        chainId: 11155111,
     };
 
     if (PRIVATE_KEY) {
         signer = new ethers.Wallet(PRIVATE_KEY, provider);
         console.log(`Using wallet: ${signer.address}`);
-        sdk = new LayerCoverSDK(signer, policyManagerAddr, sdkOptions);
+        sdk = await LayerCoverSDK.create(signer, sdkOptions);
     } else {
         console.log("No PRIVATE_KEY provided. Running in read-only mode.");
-        sdk = new LayerCoverSDK(provider, policyManagerAddr, sdkOptions);
+        sdk = await LayerCoverSDK.create(provider, sdkOptions);
     }
 
     // 3. Fetch Fixed-Rate Quotes
@@ -57,7 +54,7 @@ async function main() {
             console.log(`    Rate: ${(q.premiumRateBps / 100).toFixed(2)}% APR`);
             console.log(`    Coverage: ${ethers.formatUnits(q.coverageAmount, 6)} USDC available`);
             console.log(`    Duration: ${q.minDurationWeeks}-${q.maxDurationWeeks} weeks`);
-            console.log(`    On-chain Order: ${q.orderId ? `#${q.orderId}` : 'No (API quote)'}`);
+            console.log(`    On-chain QuoteBook ID: ${q.quoteBookQuoteId || q.orderId || 'Unavailable'}`);
             console.log('');
         });
 
@@ -99,20 +96,14 @@ async function main() {
 
             // To execute, uncomment:
             // console.log("\nExecuting purchase...");
-            // const result = await sdk.purchase(poolId, coverAmount, durationWeeks);
+            // const result = await sdk.purchaseQuote(bestQuote, coverAmount, durationWeeks);
             // console.log(`✓ Cover purchased! TX: ${result.txHash}`);
             // if (result.policyId) console.log(`  Policy ID: ${result.policyId}`);
 
             console.log("\n⚠️ Skipping actual send to avoid accidental spend.");
-            console.log("   To execute, use: sdk.purchase(poolId, coverAmount, durationWeeks)");
-        } else if (signer && !bestQuote.orderId) {
-            console.log("\n--- Intent-Based Purchase ---");
-            console.log("This quote requires the full intent flow (2 transactions).");
-            console.log("Use sdk.purchase() or sdk.purchaseWithIntent() to execute.");
-
-            // To execute intent-based purchase:
-            // const result = await sdk.purchase(poolId, coverAmount, durationWeeks);
-            // console.log(`✓ Cover purchased! TX: ${result.txHash}`);
+            console.log("   To execute the selected quote, use: sdk.purchaseQuote(bestQuote, coverAmount, durationWeeks)");
+        } else if (signer && !bestQuote.quoteBookQuoteId && !bestQuote.orderId) {
+            console.log("\n⚠️ This quote is not executable through the current QuoteBook purchase path.");
         }
 
     } catch (e) {

@@ -1,0 +1,51 @@
+name: SDK CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout SDK
+        uses: actions/checkout@v4
+
+      - name: Checkout contracts monorepo
+        uses: actions/checkout@v4
+        with:
+          repository: LayerCover/monorepo
+          path: monorepo
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install SDK deps
+        run: npm install
+
+      - name: Install monorepo deps
+        working-directory: monorepo
+        run: yarn install --immutable
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Verify dual build
+        run: npm run test:build
+
+      - name: Run local purchase e2e
+        run: npm run test:e2e:local

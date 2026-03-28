@@ -6,5 +6,9 @@ describe('smoke-testnet example', () => {
         const source = fs.readFileSync(new URL('../../examples/smoke-testnet.js', import.meta.url), 'utf8');
         expect(source).toContain("require('ethers-v6')");
         expect(source).not.toContain("require('ethers')");
+        expect(source).toContain("deployment: process.env.DEPLOYMENT || 'ethereum_sepolia_usdc'");
+        expect(source).toContain("chainId: Number(process.env.CHAIN_ID || 11155111)");
+        expect(source).toContain("await sdk.preparePurchase(");
+        expect(source).toContain("await sdk.purchaseQuote(");
     });
 });

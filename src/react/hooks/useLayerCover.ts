@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { LayerCoverSDK, FixedRateQuote, PurchaseResult, CoveragePool } from '../../index';
+import { LayerCoverSDK, FixedRateQuote, PurchaseResult, CoveragePool, PreparedPurchase } from '../../index';
 import { getHumanError } from '../../errors';
 import type { Signer, Provider } from 'ethers-v6';
 
@@ -46,6 +46,8 @@ export interface UseLayerCoverResult {
     // ── Premium & Purchase ──────────────────────────────────────
     /** Calculate premium for given amount and duration */
     calculatePremium: (amount: string, durationWeeks: number) => bigint | null;
+    /** Prepare approval/purchase transactions and blocker metadata */
+    preparePurchase: (amount: string, durationWeeks: number) => Promise<PreparedPurchase | null>;
     /** Purchase coverage */
     purchase: (amount: string, durationWeeks: number, onApprove?: () => void, onPurchase?: () => void) => Promise<PurchaseResult | null>;
     txStatus: string;
@@ -231,6 +233,50 @@ export function useLayerCover({
         [sdk, selectedQuote, decimals]
     );
 
+    const preparePurchase = useCallback(
+        async (amount: string, durationWeeks: number): Promise<PreparedPurchase | null> => {
+            if (!sdk || !poolId) {
+                setError('SDK or pool not available');
+                return null;
+            }
+
+            try {
+                const { parseUnits } = await import('ethers-v6');
+                const coverageAmount = parseUnits(amount, decimals);
+                const preparation = selectedQuote
+                    ? await sdk.preparePurchaseFromQuote(
+                        selectedQuote,
+                        coverageAmount,
+                        durationWeeks,
+                        undefined,
+                        referralCode
+                    )
+                    : await sdk.preparePurchase(
+                        poolId,
+                        coverageAmount,
+                        durationWeeks,
+                        undefined,
+                        referralCode
+                    );
+                if (preparation.quote) {
+                    setSelectedQuote(preparation.quote);
+                }
+
+                if (preparation.status === 'blocked' || preparation.status === 'signer_required' || preparation.status === 'chain_mismatch') {
+                    setError(preparation.blockers.map((blocker) => blocker.message).join(' '));
+                } else {
+                    setError('');
+                }
+
+                return preparation;
+            } catch (e: any) {
+                setError(getHumanError(e));
+                return null;
+            }
+        },
+        [sdk, poolId, decimals, referralCode, selectedQuote]
+    );
+
     const purchase = useCallback(
         async (
             amount: string,
@@ -242,8 +288,8 @@ export function useLayerCover({
                 setError('SDK or signer not available');
                 return null;
             }
-            if (!selectedQuote) {
-                setError('No quote selected.');
+            if (!poolId) {
+                setError('Pool not available.');
                 return null;
             }
 
@@ -252,44 +298,28 @@ export function useLayerCover({
             setError('');
 
             try {
-                const { parseUnits } = await import('ethers-v6');
-                const coverageAmount = parseUnits(amount, decimals);
-                const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
+                const preparation = await preparePurchase(amount, durationWeeks);
+                if (!preparation) {
+                    return null;
+                }
+                if (preparation.status === 'blocked' || preparation.status === 'signer_required' || preparation.status === 'chain_mismatch') {
+                    throw new Error(preparation.blockers.map((blocker) => blocker.message).join(' '));
+                }
+                if (!preparation.purchaseTx) {
+                    throw new Error('Purchase transaction could not be prepared');
+                }
 
-                const premium = sdk.calculatePremium(
-                    coverageAmount,
-                    selectedQuote.premiumRateBps,
-                    durationSeconds
-                );
-                const premiumWithBuffer = (premium * 105n) / 100n;
-
-                setTxStatus('Approving...');
-                const approveTx = await sdk.prepareApprovalTx(poolId!, premiumWithBuffer);
-                const approveResult = await (signer as any).sendTransaction(approveTx);
-                await approveResult.wait();
-                onApprove?.();
+                if (preparation.approvalTx) {
+                    setTxStatus('Approving...');
+                    const approveResult = await (signer as any).sendTransaction(preparation.approvalTx);
+                    await approveResult.wait();
+                    onApprove?.();
+                }
 
                 setTxStatus('Purchasing...');
-                let result: PurchaseResult;
-
-                if (selectedQuote.orderId) {
-                    const purchaseTx = await sdk.prepareBuyFromQuoteTx(
-                        selectedQuote.orderId,
-                        coverageAmount,
-                        durationSeconds,
-                        referralCode
-                    );
-                    const purchaseResult = await (signer as any).sendTransaction(purchaseTx);
-                    await purchaseResult.wait();
-                    result = { txHash: purchaseResult.hash };
-                } else {
-                    result = await sdk.purchaseWithIntent(
-                        selectedQuote,
-                        coverageAmount,
-                        durationSeconds,
-                        referralCode
-                    );
-                }
+                const purchaseResult = await (signer as any).sendTransaction(preparation.purchaseTx);
+                await purchaseResult.wait();
+                const result: PurchaseResult = { txHash: purchaseResult.hash };
 
                 onPurchase?.();
                 setTxStatus('Success! Cover purchased.');
@@ -302,7 +332,7 @@ export function useLayerCover({
                 setLoading(false);
             }
         },
-        [sdk, signer, selectedQuote, poolId, decimals, referralCode]
+        [sdk, signer, poolId, preparePurchase]
     );
 
     const bestRate = quotes.length > 0 ? quotes[0].premiumRateBps : null;
@@ -319,6 +349,7 @@ export function useLayerCover({
         fetchQuotes,
         selectQuote,
         calculatePremium,
+        preparePurchase,
         purchase,
         txStatus,
     };

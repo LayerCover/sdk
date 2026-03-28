@@ -203,25 +203,17 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
                 return;
             }
             try {
-                const quotes = await sdk.getFixedRateQuotes(poolId);
-                // Get best (cheapest) active quote
-                const activeQuotes = quotes
-                    .filter(q => q.status === 'active' && !index_1.LayerCoverSDK.isQuoteExpired(q))
-                    .sort((a, b) => a.premiumRateBps - b.premiumRateBps);
-                if (activeQuotes.length === 0) {
+                const amountBigInt = (0, ethers_v6_1.parseUnits)(amount, tokenDecimals);
+                const preparation = await sdk.preparePurchase(poolId, amountBigInt, weeks, undefined, referralCode);
+                if (!preparation.quote) {
                     setBestQuote(null);
                     setEstimatedPremium(null);
-                    setError('No active quotes available for this pool');
+                    setError(preparation.blockers.map((blocker) => blocker.message).join(' '));
                     return;
                 }
-                const best = activeQuotes[0];
-                setBestQuote(best);
-                // Calculate premium for display
-                const amountBigInt = (0, ethers_v6_1.parseUnits)(amount, tokenDecimals);
-                const durationSeconds = weeks * 7 * 24 * 60 * 60;
-                const premium = sdk.calculatePremium(amountBigInt, best.premiumRateBps, durationSeconds);
-                setEstimatedPremium(premium);
-                setError('');
+                setBestQuote(preparation.quote);
+                setEstimatedPremium(preparation.premium ?? null);
+                setError(preparation.blockers.map((blocker) => blocker.message).join(' '));
             }
             catch (e) {
                 console.error(e);
@@ -235,7 +227,7 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
         };
         const debounce = setTimeout(fetchQuote, 500);
         return () => clearTimeout(debounce);
-    }, [amount, weeks, sdk, poolId, tokenDecimals]);
+    }, [amount, weeks, sdk, poolId, tokenDecimals, referralCode, chainError]);
     const handlePurchase = async () => {
         if (!sdk || !bestQuote)
             return;
@@ -243,8 +235,7 @@ function BuyCoverModal({ open, onClose, signer, poolId, availableBalance = 0, on
         setTxStatus('Purchasing...');
         try {
             const amountBigInt = (0, ethers_v6_1.parseUnits)(amount, tokenDecimals);
-            // Use the unified purchase method which handles both on-chain and intent-based purchases
-            const result = await sdk.purchase(poolId, amountBigInt, weeks, undefined, // maxRateBps - let it use best available
+            await sdk.purchase(poolId, amountBigInt, weeks, undefined, // maxRateBps - let it use best available
             referralCode);
             setTxStatus('Success! Cover purchased.');
             onSuccess?.();

@@ -1,7 +1,8 @@
 import { ethers, Contract, Signer, Provider } from 'ethers-v6';
+import { LayerCoverSDKError } from './errors';
 export * from './adapters';
 export * from './viem-adapter';
-export { ERROR_MESSAGES, getHumanError } from './errors';
+export * from './errors';
 /** Internal no-op logger. Override via `options.debug` or `options.logger`. */
 type LogFn = (...args: any[]) => void;
 /**
@@ -12,6 +13,14 @@ export interface SDKLogger {
     debug: LogFn;
     warn: LogFn;
     error: LogFn;
+}
+export type SDKEventType = 'quotes_fetched' | 'quote_revalidated' | 'purchase_prepared' | 'purchase_preparation_blocked' | 'approval_submitted' | 'approval_confirmed' | 'purchase_submitted' | 'purchase_confirmed' | 'purchase_sync_succeeded' | 'purchase_sync_failed';
+export interface SDKEvent {
+    type: SDKEventType;
+    timestamp: string;
+    chainId: number;
+    deployment: string;
+    data: Record<string, unknown>;
 }
 /**
  * Quote from a syndicate for fixed-rate coverage
@@ -39,60 +48,18 @@ export interface FixedRateQuote {
     status: 'active' | 'expired' | 'filled';
     /** On-chain sell order ID (if posted) */
     orderId?: number;
-}
-/**
- * Reserve intent for intent-based (Flash Quote) purchases.
- * Represents a syndicate's signed commitment to underwrite coverage.
- * Obtained via {@link LayerCoverSDK.refreshQuote}.
- */
-export interface ReserveIntent {
-    /** Solver/relayer address that coordinates the match */
-    solver: string;
-    /** Syndicate (underwriter) address providing coverage */
-    underwriter: string;
-    /** Pool ID this intent applies to */
-    poolId: number;
-    /** Minimum coverage duration in seconds */
-    minCoverageDuration: number;
-    /** Maximum coverage duration in seconds */
-    maxCoverageDuration: number;
-    /** Maximum coverage amount (as BigInt string) */
-    coverageAmount: string;
-    /** Minimum fill amount (as BigInt string); 0 = no minimum */
-    minFillAmount: string;
-    /** Whether the buyer can partially fill this intent */
-    allowPartialFill: boolean;
-    /** Unix timestamp when this reservation expires */
-    reservationExpiry: number;
-    /** Unique nonce to prevent replay */
-    nonce: string;
-    /** Optional: restrict to a specific buyer address */
-    whitelistedBuyer?: string;
-    /** Minimum premium rate in basis points (seller's floor) */
-    minPremiumBps: number;
-    /** Cancellation penalty in basis points */
-    cancellationPenaltyBps: number;
-    /** @internal Alias for `underwriter` in API responses */
-    maker?: string;
-    /** @internal Alias for `minCoverageDuration` */
-    minDuration?: number;
-    /** @internal Alias for `maxCoverageDuration` */
-    maxDuration?: number;
-    /** @internal Alias for `reservationExpiry` */
-    expiry?: number;
-    /** @internal Whether upfront premium deposit is required */
+    /** On-chain QuoteBook quote id for direct PurchaseGateway fills */
+    quoteBookQuoteId?: string;
+    /** Whether the quote requires the full premium upfront */
     requiresUpfront?: boolean;
-    /** @internal Random salt for uniqueness */
-    salt?: string;
-    /** @internal Alias for `minPremiumBps` */
-    premiumRateBps?: number;
-}
-/**
- * Refreshed quote with fresh reservation (Flash Quote)
- */
-export interface RefreshedQuote {
-    reserveIntent: ReserveIntent;
-    signature: string;
+    /** Minimum fill amount required by the on-chain quote */
+    minFillAmount?: string;
+    /** QuoteBook extension address associated with this quote */
+    quoteBookExtension?: string;
+    /** Origin of the quote */
+    quoteSource?: string;
+    /** When this quote snapshot was fetched by the SDK */
+    fetchedAt?: string;
 }
 /**
  * Result of a purchase transaction
@@ -101,6 +68,107 @@ export interface PurchaseResult {
     txHash: string;
     policyId?: string;
 }
+export type PurchaseBlockerCode = 'NO_ACTIVE_QUOTES' | 'RATE_TOO_HIGH' | 'QUOTE_STALE' | 'NON_EXECUTABLE_QUOTE' | 'AMOUNT_EXCEEDS_CAPACITY' | 'AMOUNT_BELOW_MIN_FILL' | 'DURATION_OUT_OF_RANGE' | 'SIGNER_REQUIRED' | 'CHAIN_MISMATCH';
+export interface PurchaseBlocker {
+    code: PurchaseBlockerCode;
+    message: string;
+    quoteId?: string;
+}
+interface PreparedPurchaseBase {
+    quote: FixedRateQuote | null;
+    coverageAmount: bigint;
+    durationWeeks: number;
+    durationSeconds: number;
+    referralCode: string;
+}
+export interface PreparedPurchaseBlocked extends PreparedPurchaseBase {
+    status: 'blocked';
+    blockers: PurchaseBlocker[];
+    paymentTokenAddress?: undefined;
+    purchaseGatewayAddress?: undefined;
+    quoteBookQuoteId?: undefined;
+    requiresUpfront?: undefined;
+    minFillAmount?: undefined;
+    premium?: undefined;
+    premiumDeposit?: undefined;
+    approvalAmount?: undefined;
+    approvalNeeded?: undefined;
+    approvalTx?: undefined;
+    purchaseTx?: undefined;
+}
+interface PreparedExecutablePurchaseBase extends PreparedPurchaseBase {
+    quote: FixedRateQuote;
+    blockers: PurchaseBlocker[];
+    paymentTokenAddress?: string;
+    purchaseGatewayAddress?: string;
+    quoteBookQuoteId?: string;
+    requiresUpfront?: boolean;
+    minFillAmount?: bigint;
+    premium?: bigint;
+    premiumDeposit?: bigint;
+    approvalAmount?: bigint;
+    approvalTx?: ethers.TransactionRequest;
+    purchaseTx?: ethers.TransactionRequest;
+}
+export interface PreparedPurchaseReady extends PreparedExecutablePurchaseBase {
+    status: 'ready';
+    blockers: [];
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded: false;
+    approvalTx?: undefined;
+    purchaseTx: ethers.TransactionRequest;
+}
+export interface PreparedPurchaseApprovalRequired extends PreparedExecutablePurchaseBase {
+    status: 'approval_required';
+    blockers: [];
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded: true;
+    approvalTx: ethers.TransactionRequest;
+    purchaseTx: ethers.TransactionRequest;
+}
+export interface PreparedPurchaseSignerRequired extends PreparedExecutablePurchaseBase {
+    status: 'signer_required';
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded?: undefined;
+    approvalTx: ethers.TransactionRequest;
+    purchaseTx: ethers.TransactionRequest;
+}
+export interface PreparedPurchaseChainMismatch extends PreparedExecutablePurchaseBase {
+    status: 'chain_mismatch';
+    paymentTokenAddress: string;
+    purchaseGatewayAddress: string;
+    quoteBookQuoteId: string;
+    requiresUpfront: boolean;
+    minFillAmount: bigint;
+    premium: bigint;
+    premiumDeposit: bigint;
+    approvalAmount: bigint;
+    approvalNeeded?: undefined;
+    approvalTx: ethers.TransactionRequest;
+    purchaseTx: ethers.TransactionRequest;
+}
+export type PreparedPurchase = PreparedPurchaseBlocked | PreparedPurchaseReady | PreparedPurchaseApprovalRequired | PreparedPurchaseSignerRequired | PreparedPurchaseChainMismatch;
 export interface SyndicateDepositOptions {
     /** Defaults to signer address. Must equal signer for current Syndicate auth model. */
     receiver?: string;
@@ -134,18 +202,6 @@ export interface SyndicateDeadlineOptions {
 export interface SyndicateUpkeepOptions extends SyndicateDeadlineOptions {
     /** Minimum required harvested amount when using guarded upkeep path. */
     minHarvestAmount?: bigint;
-}
-/**
- * @deprecated Use FixedRateQuote instead
- */
-export interface Quote {
-    poolId: number;
-    amount: bigint;
-    period: number;
-    rateBps: number;
-    premium: bigint;
-    minDeposit: bigint;
-    capacity: bigint;
 }
 export interface PoolMetadata {
     poolId: number;
@@ -283,6 +339,9 @@ export declare const CONTRACT_ADDRESSES: Record<number, {
     intentOrderBook: string;
     poolRegistry?: string;
     capitalPool?: string;
+    purchaseGateway?: string;
+    quoteBookExtension?: string;
+    systemRegistry?: string;
 }>;
 type FallbackDeploymentConfig = {
     chainId: number;
@@ -290,6 +349,9 @@ type FallbackDeploymentConfig = {
         policyManager: string;
         intentOrderBook: string;
         poolRegistry?: string;
+        purchaseGateway?: string;
+        quoteBookExtension?: string;
+        systemRegistry?: string;
     };
 };
 export declare const DEPLOYMENT_FALLBACK_CONFIGS: Record<string, FallbackDeploymentConfig>;
@@ -306,9 +368,9 @@ export declare function getPolicyManagerAddress(chainId: number): string;
  */
 export declare function getIntentOrderBookAddress(chainId: number): string;
 /**
- * Default chain ID for LayerCover (Base Sepolia testnet)
+ * Default chain ID for LayerCover (Ethereum Sepolia testnet)
  */
-export declare const DEFAULT_CHAIN_ID = 84532;
+export declare const DEFAULT_CHAIN_ID = 11155111;
 /**
  * Default API base URL for LayerCover
  */
@@ -317,7 +379,7 @@ export declare const DEFAULT_API_BASE_URL = "https://app.layercover.com";
  * Thrown when the best available premium rate exceeds the caller's maximum.
  * Contains both the actual rate and the requested ceiling for UI messaging.
  */
-export declare class RateTooHighError extends Error {
+export declare class RateTooHighError extends LayerCoverSDKError {
     rate: number;
     maxRate: number;
     constructor(message: string, rate: number, maxRate: number);
@@ -326,7 +388,7 @@ export declare class RateTooHighError extends Error {
  * Thrown when no underwriter quotes are available for a pool.
  * This typically means no syndicates are currently offering coverage.
  */
-export declare class NoQuotesAvailableError extends Error {
+export declare class NoQuotesAvailableError extends LayerCoverSDKError {
     constructor(message: string);
 }
 export interface LayerCoverSDKOptions {
@@ -336,6 +398,12 @@ export interface LayerCoverSDKOptions {
     policyNFTAddress?: string;
     /** PoolRegistry contract address (optional explicit override) */
     poolRegistryAddress?: string;
+    /** PurchaseGateway contract address for direct QuoteBook purchases */
+    purchaseGatewayAddress?: string;
+    /** QuoteBookExtension contract address */
+    quoteBookExtensionAddress?: string;
+    /** SystemRegistry contract address for runtime contract discovery */
+    systemRegistryAddress?: string;
     /** API base URL for fetching quotes (default: https://app.layercover.com) */
     apiBaseUrl?: string;
     /** Deployment identifier (e.g., 'base_sepolia_usdc') */
@@ -358,6 +426,8 @@ export interface LayerCoverSDKOptions {
      * Default: silent (no console output).
      */
     debug?: boolean | SDKLogger;
+    /** Optional structured lifecycle event hook for quotes, preflight, and transactions. */
+    onEvent?: (event: SDKEvent) => void;
 }
 /**
  * Main entry point for interacting with the LayerCover protocol.
@@ -384,12 +454,11 @@ export declare class LayerCoverSDK {
     signer?: Signer;
     /** PolicyManager contract instance */
     policyManager: Contract;
-    /** IntentOrderBook contract instance (undefined if not deployed on this chain) */
-    intentOrderBook?: Contract;
     private _apiBaseUrl;
     private _deployment;
     private _chainId;
     private _log;
+    private _onEvent?;
     private _requestTimeoutMs;
     private _maxRetries;
     private _retryDelayMs;
@@ -404,7 +473,13 @@ export declare class LayerCoverSDK {
     private _policyNFTAddress?;
     private _poolRegistryAddress?;
     private _settlementAssetAddress?;
+    private _purchaseGatewayAddress?;
+    private _quoteBookExtensionAddress?;
+    private _systemRegistryAddress?;
     constructor(providerOrSigner: Provider | Signer, policyManagerAddress: string, options?: LayerCoverSDKOptions);
+    private _emitEvent;
+    private _emitPreparedPurchaseEvent;
+    private _buildPurchaseBlockedError;
     /**
      * Configuration fetched from the API
      */
@@ -414,6 +489,9 @@ export declare class LayerCoverSDK {
             intentOrderBook: string;
             intentMatcher?: string;
             poolRegistry?: string;
+            purchaseGateway?: string;
+            quoteBookExtension?: string;
+            systemRegistry?: string;
         };
         chainId: number;
         apiBaseUrl: string;
@@ -445,6 +523,9 @@ export declare class LayerCoverSDK {
             intentMatcher?: string;
             policyNFT?: string;
             poolRegistry?: string;
+            purchaseGateway?: string;
+            quoteBookExtension?: string;
+            systemRegistry?: string;
         };
         chainId: number;
         apiBaseUrl: string;
@@ -473,29 +554,22 @@ export declare class LayerCoverSDK {
         chainId?: number;
         deployment?: string;
         debug?: boolean | SDKLogger;
+        onEvent?: (event: SDKEvent) => void;
         requestTimeoutMs?: number;
         maxRetries?: number;
         retryDelayMs?: number;
         txConfirmations?: number;
         txWaitTimeoutMs?: number;
     }): Promise<LayerCoverSDK>;
+    private _mapFixedRateQuote;
+    private _normalizeFixedRateQuotes;
+    private _fetchQuotesBatch;
     /**
      * Fetch available fixed-rate quotes from the orderbook API
      * @param poolId The pool ID to fetch quotes for
      * @returns Array of available quotes sorted by rate (lowest first)
      */
     getFixedRateQuotes(poolId: number): Promise<FixedRateQuote[]>;
-    /**
-     * Refresh a quote by signing a new intent client-side and submitting it.
-     * This is required before executing an intent-based purchase.
-     * The signer creates a fresh CoverageIntent, signs it, and submits to PUT.
-     *
-     * @param quoteId The quote ID to refresh
-     * @param amount Coverage amount to reserve
-     * @param durationSeconds Coverage duration in seconds
-     * @returns Fresh reserve intent and signature
-     */
-    refreshQuote(quoteId: string, amount: bigint, durationSeconds: number): Promise<RefreshedQuote>;
     /**
      * Calculate the premium for a given coverage amount, rate, and duration
      * @param coverageAmount Amount to cover (in wei/smallest unit)
@@ -510,6 +584,40 @@ export declare class LayerCoverSDK {
      * @returns Best rate in basis points, or null if no quotes available
      */
     getBestRate(poolId: number): Promise<number | null>;
+    /**
+     * Get the cheapest active quote that is executable for the requested amount and duration.
+     *
+     * @param poolId The pool ID
+     * @param coverageAmount Desired coverage amount
+     * @param durationWeeks Desired duration in weeks
+     * @param maxRateBps Optional maximum acceptable premium rate
+     * @returns The cheapest executable quote, or null if none can satisfy the request
+     */
+    getBestExecutableQuote(poolId: number, coverageAmount: bigint, durationWeeks: number, maxRateBps?: number): Promise<FixedRateQuote | null>;
+    /**
+     * Prepare a full buyer preflight for the current QuoteBook path.
+     * Returns the selected quote, approval/purchase transactions, and structured blockers.
+     *
+     * @param poolId Pool to purchase from
+     * @param coverageAmount Amount of coverage
+     * @param durationWeeks Duration in weeks
+     * @param maxRateBps Optional maximum acceptable rate
+     * @param referralCode Optional referral code (bytes32)
+     * @returns Prepared purchase state including transactions and blockers
+     */
+    preparePurchase(poolId: number, coverageAmount: bigint, durationWeeks: number, maxRateBps?: number, referralCode?: string): Promise<PreparedPurchase>;
+    /**
+     * Prepare a buyer preflight for a specific quote selected by the integrator.
+     * This preserves quote choice instead of auto-switching to a cheaper executable quote.
+     *
+     * @param quote The exact quote to validate and prepare against
+     * @param coverageAmount Amount of coverage
+     * @param durationWeeks Duration in weeks
+     * @param maxRateBps Optional maximum acceptable rate
+     * @param referralCode Optional referral code (bytes32)
+     * @returns Prepared purchase state for the selected quote
+     */
+    preparePurchaseFromQuote(quote: FixedRateQuote, coverageAmount: bigint, durationWeeks: number, maxRateBps?: number, referralCode?: string): Promise<PreparedPurchase>;
     /**
      * List all available coverage pools with enriched metadata.
      * This is the primary discovery method for 3rd-party integrators — no need
@@ -574,6 +682,24 @@ export declare class LayerCoverSDK {
      */
     static isQuoteExpired(quote: FixedRateQuote): boolean;
     /**
+     * Get the age of a locally cached quote snapshot in milliseconds.
+     *
+     * @param quote The quote to inspect
+     * @returns Quote age in milliseconds, or null if the SDK does not know when it was fetched
+     */
+    static getQuoteAgeMs(quote: FixedRateQuote): number | null;
+    /**
+     * Check whether a quote snapshot is too old to trust for execution without revalidation.
+     *
+     * A quote is considered stale when it has already expired, or when the SDK fetched it
+     * longer ago than the supplied freshness threshold.
+     *
+     * @param quote The quote to inspect
+     * @param maxAgeMs Maximum acceptable quote age in milliseconds
+     * @returns true if the quote should be refreshed before execution
+     */
+    static isQuoteStale(quote: FixedRateQuote, maxAgeMs?: number): boolean;
+    /**
      * Fetch only active (non-expired) quotes for a pool, sorted by rate.
      *
      * @param poolId The pool ID
@@ -586,6 +712,28 @@ export declare class LayerCoverSDK {
      * ```
      */
     getActiveQuotes(poolId: number): Promise<FixedRateQuote[]>;
+    /**
+     * Refresh a previously selected quote against the latest active quotes for its pool.
+     *
+     * Returns the updated quote when it still exists, otherwise null.
+     *
+     * @param quote The previously selected quote
+     * @returns The fresh matching quote, or null if it no longer exists
+     */
+    refreshSelectedQuote(quote: FixedRateQuote): Promise<FixedRateQuote | null>;
+    /**
+     * Revalidate a quote before purchase if the local snapshot is stale.
+     *
+     * If the quote is still fresh, the original quote is returned. If it is stale, the SDK
+     * fetches active quotes for the same pool and returns the matching live quote when present.
+     *
+     * @param quote The quote to validate
+     * @param options Optional freshness threshold override
+     * @returns The original or refreshed quote, or null if the selected quote is no longer available
+     */
+    revalidateQuoteForPurchase(quote: FixedRateQuote, options?: {
+        maxAgeMs?: number;
+    }): Promise<FixedRateQuote | null>;
     /**
      * Sort quotes by premium rate (cheapest first).
      * Utility for integrators who fetch quotes separately and need to re-sort.
@@ -606,17 +754,6 @@ export declare class LayerCoverSDK {
      */
     prepareBuyFromQuoteTx(orderId: number, coverageAmount: bigint, durationSeconds: number, referralCode?: string): Promise<ethers.TransactionRequest>;
     /**
-     * Execute a full purchase flow using the intent system.
-     * Uses the current IntentMatcher `executeMatchedIntent` path.
-     *
-     * @param quote The quote to purchase from
-     * @param coverageAmount Amount of coverage to purchase
-     * @param durationSeconds Duration in seconds
-     * @param referralCode Optional referral code (bytes32)
-     * @returns Transaction hash and policy ID
-     */
-    purchaseWithIntent(quote: FixedRateQuote, coverageAmount: bigint, durationSeconds: number, referralCode?: string): Promise<PurchaseResult>;
-    /**
      * Simplified purchase method - automatically chooses best path
      *
      * @param poolId Pool to purchase from
@@ -627,94 +764,38 @@ export declare class LayerCoverSDK {
      * @returns Transaction hash and policy ID
      */
     purchase(poolId: number, coverageAmount: bigint, durationWeeks: number, maxRateBps?: number, referralCode?: string): Promise<PurchaseResult>;
-    private _executeQuotePurchase;
-    private _coerceCoverageIntent;
+    /**
+     * Execute a purchase against a specific quote selected by the integrator.
+     *
+     * @param quote The exact quote to execute against
+     * @param coverageAmount Amount of coverage
+     * @param durationWeeks Duration in weeks
+     * @param maxRateBps Optional maximum acceptable rate
+     * @param referralCode Optional referral code (bytes32)
+     * @returns Transaction hash and policy ID
+     */
+    purchaseQuote(quote: FixedRateQuote, coverageAmount: bigint, durationWeeks: number, maxRateBps?: number, referralCode?: string): Promise<PurchaseResult>;
+    private _isQuoteBookQuote;
+    private _getQuoteMinFillAmount;
+    private _getQuoteExecutionBlockers;
+    private _summarizePurchaseBlockers;
+    private _findMatchingQuote;
+    private _revalidateQuoteSelection;
+    private _createBlockedPurchasePreparation;
+    private _buildPurchasePreparationForQuote;
+    private _resolveQuoteBookQuoteId;
+    private _encodeQuoteBookPurchaseRequest;
+    private _resolveQuoteBookExtensionAddress;
+    private _resolvePurchaseGatewayAddress;
+    private _previewDirectQuoteBookPurchase;
+    private _getTokenAllowance;
+    private _executeDirectQuoteBookPurchase;
+    private _extractPolicyResultFromReceipt;
     private _syncFilledQuote;
-    /**
-     * EIP-712 domain for Reserve Intent signing
-     */
-    private static readonly RESERVE_INTENT_DOMAIN;
-    /**
-     * EIP-712 types for Reserve Intent
-     */
-    private static readonly RESERVE_INTENT_TYPES;
-    /**
-     * EIP-712 domain for Coverage Intent signing
-     */
-    private static readonly COVERAGE_INTENT_DOMAIN;
-    /**
-     * EIP-712 domain for Orderbook Auth
-     */
-    private static readonly ORDERBOOK_AUTH_DOMAIN;
-    /**
-     * EIP-712 types for Orderbook Auth
-     */
-    private static readonly ORDERBOOK_AUTH_TYPES;
-    /**
-     * EIP-712 types for Coverage Intent
-     */
-    private static readonly COVERAGE_INTENT_TYPES;
-    /**
-     * EIP-712 types for buyer orders (must match IIntentMatcher.CoverageBuyOrder).
-     */
-    private static readonly COVERAGE_BUY_ORDER_TYPES;
-    private static readonly EXECUTE_MATCHED_INTENT_ABI;
-    /**
-     * Create a Base64-encoded auth header for write endpoints.
-     * @internal
-     */
-    private _createAuthHeader;
-    /**
-     * Submit a new coverage quote to the orderbook.
-     * This allows syndicates to programmatically provide liquidity.
-     *
-     * The signer must be the syndicate manager or an authorized solver.
-     *
-     * @param params Quote parameters
-     * @returns Quote submission result with signatures
-     *
-     * @example
-     * ```typescript
-     * const sdk = new LayerCoverSDK(signer, policyManagerAddress, { apiBaseUrl: 'https://app.layercover.com' });
-     *
-     * const result = await sdk.submitQuote({
-     *     poolId: 1,
-     *     syndicateAddress: '0x...',
-     *     coverageAmount: ethers.parseUnits('10000', 6), // 10,000 USDC
-     *     premiumRateBps: 500, // 5% APY
-     *     minDurationWeeks: 4,
-     *     maxDurationWeeks: 12,
-     * });
-     *
-     * console.log('Quote submitted:', result.quoteId);
-     * ```
-     */
-    submitQuote(params: {
-        poolId: number;
-        syndicateAddress: string;
-        coverageAmount: bigint;
-        premiumRateBps: number;
-        minDurationWeeks: number;
-        maxDurationWeeks: number;
-        allowPartialFill?: boolean;
-        minFillAmount?: bigint;
-        expiryHours?: number;
-        whitelistedBuyer?: string;
-        intentMatcherAddress?: string;
-    }): Promise<{
-        quoteId: string;
-        quote: FixedRateQuote;
-        reserveIntent: ReserveIntent;
-        coverageIntent: any;
-        reserveSignature: string;
-        intentSignature: string;
-    }>;
-    /**
-     * Cancel an existing quote
-     * @param quoteId The quote ID to cancel
-     * @param syndicateAddress The syndicate address that owns the quote (required for auth)
-     */
-    cancelQuote(quoteId: string, syndicateAddress?: string): Promise<boolean>;
+    private static readonly PURCHASE_GATEWAY_ABI;
+    private static readonly QUOTE_BOOK_EXTENSION_RUNTIME_ABI;
+    private static readonly SYSTEM_REGISTRY_ABI;
+    private static readonly PURCHASE_EXTENSION_SYSTEM_ID;
     /**
      * Get quotes for a specific syndicate
      * @param syndicateAddress The syndicate address
@@ -777,16 +858,6 @@ export declare class LayerCoverSDK {
      * Prefers guarded `upkeepWithMinHarvest` and falls back to legacy `upkeep` when unavailable.
      */
     runSyndicateUpkeep(syndicateAddress: string, options?: SyndicateUpkeepOptions): Promise<ethers.TransactionResponse>;
-    /**
-     * @deprecated Use getFixedRateQuotes() for the current fixed-rate model.
-     * This method is no longer supported as the protocol has transitioned to
-     * 100% fixed-rate coverage.
-     */
-    getQuote(poolId: number, coverAmount: bigint, periodDays: number, maxRateBps?: number): Promise<Quote>;
-    /**
-     * @deprecated Use prepareBuyFromQuoteTx() or purchase() for the fixed-rate model.
-     */
-    preparePurchaseTx(poolId: number, coverAmount: bigint, maxPremium: bigint, referralCode?: string, durationSeconds?: number): Promise<ethers.TransactionRequest>;
     private static _sleep;
     private static _isRetryableStatus;
     private static _isRetryableFetchError;

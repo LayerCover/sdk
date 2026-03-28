@@ -191,40 +191,66 @@ function useLayerCover({ signer, policyManagerAddress, poolId, decimals = 6, api
             return null;
         }
     }, [sdk, selectedQuote, decimals]);
+    const preparePurchase = (0, react_1.useCallback)(async (amount, durationWeeks) => {
+        if (!sdk || !poolId) {
+            setError('SDK or pool not available');
+            return null;
+        }
+        try {
+            const { parseUnits } = await Promise.resolve().then(() => __importStar(require('ethers-v6')));
+            const coverageAmount = parseUnits(amount, decimals);
+            const preparation = selectedQuote
+                ? await sdk.preparePurchaseFromQuote(selectedQuote, coverageAmount, durationWeeks, undefined, referralCode)
+                : await sdk.preparePurchase(poolId, coverageAmount, durationWeeks, undefined, referralCode);
+            if (preparation.quote) {
+                setSelectedQuote(preparation.quote);
+            }
+            if (preparation.status === 'blocked' || preparation.status === 'signer_required' || preparation.status === 'chain_mismatch') {
+                setError(preparation.blockers.map((blocker) => blocker.message).join(' '));
+            }
+            else {
+                setError('');
+            }
+            return preparation;
+        }
+        catch (e) {
+            setError((0, errors_1.getHumanError)(e));
+            return null;
+        }
+    }, [sdk, poolId, decimals, referralCode, selectedQuote]);
     const purchase = (0, react_1.useCallback)(async (amount, durationWeeks, onApprove, onPurchase) => {
         if (!sdk || !signer) {
             setError('SDK or signer not available');
             return null;
         }
-        if (!selectedQuote) {
-            setError('No quote selected.');
+        if (!poolId) {
+            setError('Pool not available.');
             return null;
         }
         setLoading(true);
         setTxStatus('Preparing...');
         setError('');
         try {
-            const { parseUnits } = await Promise.resolve().then(() => __importStar(require('ethers-v6')));
-            const coverageAmount = parseUnits(amount, decimals);
-            const durationSeconds = durationWeeks * 7 * 24 * 60 * 60;
-            const premium = sdk.calculatePremium(coverageAmount, selectedQuote.premiumRateBps, durationSeconds);
-            const premiumWithBuffer = (premium * 105n) / 100n;
-            setTxStatus('Approving...');
-            const approveTx = await sdk.prepareApprovalTx(poolId, premiumWithBuffer);
-            const approveResult = await signer.sendTransaction(approveTx);
-            await approveResult.wait();
-            onApprove?.();
+            const preparation = await preparePurchase(amount, durationWeeks);
+            if (!preparation) {
+                return null;
+            }
+            if (preparation.status === 'blocked' || preparation.status === 'signer_required' || preparation.status === 'chain_mismatch') {
+                throw new Error(preparation.blockers.map((blocker) => blocker.message).join(' '));
+            }
+            if (!preparation.purchaseTx) {
+                throw new Error('Purchase transaction could not be prepared');
+            }
+            if (preparation.approvalTx) {
+                setTxStatus('Approving...');
+                const approveResult = await signer.sendTransaction(preparation.approvalTx);
+                await approveResult.wait();
+                onApprove?.();
+            }
             setTxStatus('Purchasing...');
-            let result;
-            if (selectedQuote.orderId) {
-                const purchaseTx = await sdk.prepareBuyFromQuoteTx(selectedQuote.orderId, coverageAmount, durationSeconds, referralCode);
-                const purchaseResult = await signer.sendTransaction(purchaseTx);
-                await purchaseResult.wait();
-                result = { txHash: purchaseResult.hash };
-            }
-            else {
-                result = await sdk.purchaseWithIntent(selectedQuote, coverageAmount, durationSeconds, referralCode);
-            }
+            const purchaseResult = await signer.sendTransaction(preparation.purchaseTx);
+            await purchaseResult.wait();
+            const result = { txHash: purchaseResult.hash };
             onPurchase?.();
             setTxStatus('Success! Cover purchased.');
             return result;
@@ -237,7 +263,7 @@ function useLayerCover({ signer, policyManagerAddress, poolId, decimals = 6, api
         finally {
             setLoading(false);
         }
-    }, [sdk, signer, selectedQuote, poolId, decimals, referralCode]);
+    }, [sdk, signer, poolId, preparePurchase]);
     const bestRate = quotes.length > 0 ? quotes[0].premiumRateBps : null;
     return {
         sdk,
@@ -251,6 +277,7 @@ function useLayerCover({ signer, policyManagerAddress, poolId, decimals = 6, api
         fetchQuotes,
         selectQuote,
         calculatePremium,
+        preparePurchase,
         purchase,
         txStatus,
     };

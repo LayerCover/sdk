@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ERROR_MESSAGES = void 0;
+exports.ChainMismatchError = exports.SignerRequiredError = exports.QuoteStaleError = exports.PurchaseBlockedError = exports.LayerCoverSDKError = exports.ERROR_MESSAGES = void 0;
 exports.getHumanError = getHumanError;
 /**
  * Human-readable error messages for LayerCover contract reverts.
@@ -59,8 +59,49 @@ exports.ERROR_MESSAGES = {
 const CHAIN_DISPLAY_NAMES = {
     31337: 'Localhost',
     43113: 'Avalanche Fuji',
+    11155111: 'Ethereum Sepolia',
     84532: 'Base Sepolia',
 };
+class LayerCoverSDKError extends Error {
+    constructor(message, code = 'SDK_ERROR', options = {}) {
+        super(message);
+        this.name = new.target.name;
+        this.code = code;
+        this.cause = options.cause;
+    }
+}
+exports.LayerCoverSDKError = LayerCoverSDKError;
+class PurchaseBlockedError extends LayerCoverSDKError {
+    constructor(message, blockers, options = {}) {
+        super(message, 'PURCHASE_BLOCKED', options);
+        this.blockers = blockers;
+    }
+}
+exports.PurchaseBlockedError = PurchaseBlockedError;
+class QuoteStaleError extends LayerCoverSDKError {
+    constructor(message, quoteId, maxAgeMs, quoteAgeMs, options = {}) {
+        super(message, 'QUOTE_STALE', options);
+        this.quoteId = quoteId;
+        this.maxAgeMs = maxAgeMs;
+        this.quoteAgeMs = quoteAgeMs;
+    }
+}
+exports.QuoteStaleError = QuoteStaleError;
+class SignerRequiredError extends LayerCoverSDKError {
+    constructor(message = 'A signer is required for this operation.', options = {}) {
+        super(message, 'SIGNER_REQUIRED', options);
+    }
+}
+exports.SignerRequiredError = SignerRequiredError;
+class ChainMismatchError extends LayerCoverSDKError {
+    constructor(message, expectedChainId, connectedChainId, expectedDeployment, options = {}) {
+        super(message, 'CHAIN_MISMATCH', options);
+        this.expectedChainId = expectedChainId;
+        this.connectedChainId = connectedChainId;
+        this.expectedDeployment = expectedDeployment;
+    }
+}
+exports.ChainMismatchError = ChainMismatchError;
 function getExpectedChainId(error) {
     if (typeof error?.expectedChainId === 'number' && Number.isFinite(error.expectedChainId)) {
         return error.expectedChainId;
@@ -91,6 +132,29 @@ function getExpectedDeployment(error) {
 function getHumanError(error) {
     if (!error)
         return 'An unknown error occurred.';
+    if (typeof error === 'string')
+        return error;
+    if (error instanceof PurchaseBlockedError) {
+        return error.blockers.length > 0
+            ? error.blockers.map((blocker) => blocker.message).join(' ')
+            : error.message;
+    }
+    if (error instanceof QuoteStaleError) {
+        return 'The selected quote is stale. Refresh quotes and try again.';
+    }
+    if (error instanceof SignerRequiredError) {
+        return 'Wallet connection required. Connect a signer to continue.';
+    }
+    if (error instanceof ChainMismatchError) {
+        const chainLabel = CHAIN_DISPLAY_NAMES[error.expectedChainId] || null;
+        if (chainLabel && error.expectedDeployment) {
+            return `Wrong network. Please switch to ${chainLabel} (${error.expectedDeployment}) in your wallet.`;
+        }
+        if (chainLabel) {
+            return `Wrong network. Please switch to ${chainLabel} (chain ${error.expectedChainId}) in your wallet.`;
+        }
+        return `Wrong network. Please switch to chain ${error.expectedChainId} in your wallet.`;
+    }
     // ── User rejection ─────────────────────────────────────────────────
     if (error?.code === 'ACTION_REJECTED' ||
         error?.message?.includes('user rejected') ||

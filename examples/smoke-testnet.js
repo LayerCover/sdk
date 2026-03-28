@@ -3,7 +3,7 @@
  * smoke-testnet.js
  *
  * Testnet smoke script for SDK integration:
- *   create -> listPools -> getBestRate -> purchase (optional execute)
+ *   create -> listPools -> getBestRate -> preparePurchase -> purchaseQuote (optional execute)
  *
  * Default mode is --dry-run (safe): no transaction is sent.
  *
@@ -16,10 +16,10 @@ const { ethers } = require('ethers-v6');
 const { LayerCoverSDK } = require('../dist/index.js');
 
 const DEFAULTS = {
-    rpcUrl: process.env.RPC_URL || 'https://sepolia.base.org',
+    rpcUrl: process.env.RPC_URL || 'https://eth-sepolia.g.alchemy.com/v2/demo',
     apiBaseUrl: process.env.API_BASE_URL || 'https://app.layercover.com',
-    deployment: process.env.DEPLOYMENT || 'base_sepolia_usdc',
-    chainId: Number(process.env.CHAIN_ID || 84532),
+    deployment: process.env.DEPLOYMENT || 'ethereum_sepolia_usdc',
+    chainId: Number(process.env.CHAIN_ID || 11155111),
     poolId: Number(process.env.POOL_ID || 1),
     amountUsdc: Number(process.env.COVERAGE_AMOUNT_USDC || 25),
     weeks: Number(process.env.DURATION_WEEKS || 4),
@@ -68,8 +68,8 @@ Usage:
   node examples/smoke-testnet.js [--dry-run] [--execute] [options]
 
 Modes:
-  --dry-run         Safe mode (default). Runs full read checks and purchase prechecks, no tx sent.
-  --execute         Executes sdk.purchase(...) and sends transactions (requires PRIVATE_KEY + funds).
+  --dry-run         Safe mode (default). Runs full read checks and buyer preflight, no tx sent.
+  --execute         Executes sdk.purchaseQuote(...) and sends transactions (requires PRIVATE_KEY + funds).
 
 Options:
   --pool-id=<n>         Pool ID (default: ${DEFAULTS.poolId})
@@ -199,21 +199,20 @@ async function main() {
     }
     console.log(`✓ Best active rate: ${bestRateBps} bps (${(bestRateBps / 100).toFixed(2)}%)`);
 
-    console.log('\n[3/4] purchase prechecks');
-    const quotes = await sdk.getActiveQuotes(selectedPoolId);
-    if (quotes.length === 0) {
-        throw new Error(`No active quotes available for pool ${selectedPoolId}`);
-    }
-    const bestQuote = quotes[0];
+    console.log('\n[3/4] preparePurchase()');
     const amount = ethers.parseUnits(String(cfg.amountUsdc), 6);
-    const durationSeconds = cfg.weeks * 7 * 24 * 60 * 60;
-    const premium = sdk.calculatePremium(amount, bestQuote.premiumRateBps, durationSeconds);
-    console.log(`✓ Selected quote: ${bestQuote.id} @ ${bestQuote.premiumRateBps} bps`);
+    const preparation = await sdk.preparePurchase(selectedPoolId, amount, cfg.weeks, cfg.maxRateBps);
+    if (preparation.status === 'blocked' || preparation.status === 'chain_mismatch') {
+        throw new Error(preparation.blockers.map((blocker) => blocker.message).join(' '));
+    }
+    const selectedQuote = preparation.quote;
+    console.log(`✓ Selected quote: ${selectedQuote.id} @ ${selectedQuote.premiumRateBps} bps`);
     console.log(`✓ Selected pool: ${selectedPoolId} (${pool.name})`);
-    console.log(`✓ Est premium: ${fmt(premium)} USDC`);
-    console.log(`✓ Quote path: ${bestQuote.orderId !== undefined && bestQuote.orderId !== null ? 'on-chain order' : 'intent flow'}`);
+    console.log(`✓ Est premium: ${fmt(preparation.premium)} USDC`);
+    console.log(`✓ Preparation status: ${preparation.status}`);
+    console.log('✓ Quote path: on-chain QuoteBook');
 
-    console.log('\n[4/4] purchase()');
+    console.log('\n[4/4] purchaseQuote()');
     if (!cfg.execute) {
         console.log('✓ Dry run complete (no transaction sent)');
         console.log('  To execute live tx: add --execute and set PRIVATE_KEY');
@@ -224,7 +223,7 @@ async function main() {
         throw new Error('Signer is required for execute mode');
     }
 
-    const result = await sdk.purchase(selectedPoolId, amount, cfg.weeks, cfg.maxRateBps);
+    const result = await sdk.purchaseQuote(selectedQuote, amount, cfg.weeks, cfg.maxRateBps);
     console.log('✓ Purchase submitted');
     console.log(`  Tx hash:   ${result.txHash}`);
     if (result.policyId) console.log(`  Policy ID: ${result.policyId}`);

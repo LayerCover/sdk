@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `getBestExecutableQuote()` for selecting the cheapest quote that can actually satisfy a requested amount and duration
+- `preparePurchase()` for buyer preflight, including executable quote selection, blocker reporting, and prepared approval/purchase transactions
+
+### Changed
+
+- `purchase()` now targets only the current on-chain QuoteBook path and uses the same executable-quote selection model as `preparePurchase()`
+- React helpers (`useLayerCover`, `BuyCoverModal`) now preflight purchases through `preparePurchase()` so the displayed quote matches the executed transaction
+- package docs and examples now use `ethereum_sepolia_usdc` and document `preparePurchase()` as the primary integration path
+
+### Removed
+
+- legacy intent-based buyer and quote-management flows from the public SDK surface
+
 ## [0.5.0] - 2026-02-08
 
 ### Added
