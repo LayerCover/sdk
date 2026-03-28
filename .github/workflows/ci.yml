@@ -16,16 +16,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      HAS_MONOREPO_TOKEN: ${{ secrets.MONOREPO_READ_TOKEN != '' && 'true' || 'false' }}
 
     steps:
       - name: Checkout SDK
         uses: actions/checkout@v4
 
       - name: Checkout contracts monorepo
+        if: env.HAS_MONOREPO_TOKEN == 'true'
         uses: actions/checkout@v4
         with:
           repository: LayerCover/monorepo
           path: monorepo
+          token: ${{ secrets.MONOREPO_READ_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -39,6 +43,7 @@ jobs:
         run: npm install
 
       - name: Install monorepo deps
+        if: env.HAS_MONOREPO_TOKEN == 'true'
         working-directory: monorepo
         run: yarn install --immutable
 
@@ -49,4 +54,9 @@ jobs:
         run: npm run test:build
 
       - name: Run local purchase e2e
+        if: env.HAS_MONOREPO_TOKEN == 'true'
         run: npm run test:e2e:local
+
+      - name: Skip local purchase e2e
+        if: env.HAS_MONOREPO_TOKEN != 'true'
+        run: echo "Skipping test:e2e:local because MONOREPO_READ_TOKEN is not configured."

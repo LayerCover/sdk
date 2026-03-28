@@ -20,23 +20,15 @@ import {
     getTokenLogoUrl,
 } from '../../src/index';
 import { Wallet, JsonRpcProvider, Interface, AbiCoder } from 'ethers-v6';
-import fs from 'node:fs';
+import { DEPLOYMENT_FIXTURES, POLICY_NFT_ABI_FIXTURE } from '../fixtures/contracts';
 
 function loadDeploymentJsonCandidates(network: string, instance = 'usdc') {
-    const candidates = [
-        new URL(`../../../monorepo/packages/contracts/deployments/${network}/${instance}.json`, import.meta.url),
-        new URL(`../../../docs-site/packages/contracts/deployments/${network}/${instance}.json`, import.meta.url),
-    ];
-
-    return candidates
-        .filter((candidate) => fs.existsSync(candidate))
-        .map((candidate) => JSON.parse(fs.readFileSync(candidate, 'utf8')));
+    const fixture = DEPLOYMENT_FIXTURES[network]?.[instance];
+    return fixture ? [fixture] : [];
 }
 
 function loadPolicyNftAbi() {
-    const candidate = new URL('../../../subgraph/abis/PolicyNFT.json', import.meta.url);
-    const artifact = JSON.parse(fs.readFileSync(candidate, 'utf8'));
-    return artifact.abi ?? artifact;
+    return POLICY_NFT_ABI_FIXTURE;
 }
 
 // ──────────────────────────────────────────────────────────────
